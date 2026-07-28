@@ -1,0 +1,43 @@
+# Sensitive config
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Database & data
+backend/data/
+backend/chroma_data/
+*.db
+*.sqlite3
+
+# HuggingFace models
+model_cache/
+
+# Docker volumes
+pgdata/
+redisdata/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Claude / AI assistant
+.claude/

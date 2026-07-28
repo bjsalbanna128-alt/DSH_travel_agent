@@ -1,0 +1,81 @@
+services:
+  # ── PostgreSQL 16 + pgvector ────────────────────────────
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: travel_db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: travel
+      POSTGRES_PASSWORD: travel123
+      POSTGRES_DB: travel_agent
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U travel -d travel_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Redis 7 ─────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: travel_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Backend API (FastAPI) ────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: travel_api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://travel:travel123@db:5432/travel_agent
+      - REDIS_URL=redis://redis:6379
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      - AMAP_API_KEY=${AMAP_API_KEY}
+      - QWEATHER_API_KEY=${QWEATHER_API_KEY:-}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-change-me-in-production}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - APP_ENV=production
+      - DEBUG=false
+    volumes:
+      - chroma_data:/app/chroma_data
+      - model_cache:/root/.cache/huggingface
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Frontend (Vue3 SPA + Nginx) ─────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: travel_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  chroma_data:
+  model_cache:

@@ -1,0 +1,45 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# System deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python deps directly (faster than pip install .)
+RUN pip install --no-cache-dir \
+    fastapi>=0.115.0 \
+    "uvicorn[standard]>=0.30.0" \
+    langgraph>=0.2.0 \
+    langchain>=0.3.0 \
+    langchain-core>=0.3.0 \
+    openai>=1.50.0 \
+    chromadb>=0.5.0 \
+    "sqlalchemy[asyncio]>=2.0.30" \
+    asyncpg>=0.29.0 \
+    redis>=5.0.0 \
+    pydantic>=2.8.0 \
+    pydantic-settings>=2.4.0 \
+    "python-jose[cryptography]>=3.3.0" \
+    "passlib[bcrypt]>=1.7.4" \
+    httpx>=0.27.0 \
+    tenacity>=8.5.0 \
+    scikit-learn>=1.5.0 \
+    numpy>=1.26.0 \
+    scipy>=1.14.0 \
+    sentence-transformers>=3.0.0 \
+    python-dotenv>=1.0.0 \
+    aiosqlite>=0.20.0
+
+# Copy source
+COPY backend/ .
+
+# Data directories
+RUN mkdir -p /app/data /app/chroma_data
+
+# HuggingFace mirror for China (set HF_ENDPOINT to disable)
+ENV HF_ENDPOINT=https://hf-mirror.com
+
+EXPOSE 8000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
