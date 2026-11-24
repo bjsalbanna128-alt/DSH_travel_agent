@@ -141,3 +141,8 @@ def build_travel_graph(checkpointer=None):
 
 # Create singleton
 travel_graph = build_travel_graph()
+
+
+def planning_config(user_id: str, thread_id: str) -> dict[str, dict[str, str]]:
+    """Scope the checkpoint key while retaining the public thread ID."""
+    return {"configurable": {"thread_id": f"{user_id}:{thread_id}"}}

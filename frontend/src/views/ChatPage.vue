@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const auth = useAuthStore()
 
 const threadId = ref(crypto.randomUUID())
 const ws = ref<WebSocket | null>(null)
@@ -32,12 +34,13 @@ const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
 const wsUrl = `${wsProtocol}//${window.location.host}/ws/chat/${threadId.value}`
 
 function connect() {
+  const token = auth.token
+  if (!token) return
   const socket = new WebSocket(wsUrl)
   ws.value = socket
 
   socket.onopen = () => {
-    connected.value = true
-    addSystem('已连接到 AI 旅行规划助手')
+    socket.send(JSON.stringify({ type: 'auth', token }))
   }
 
   socket.onmessage = (event) => {
@@ -49,9 +52,13 @@ function connect() {
     }
   }
 
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     connected.value = false
     streaming.value = false
+    if (event.code === 1008 && auth.token === token) {
+      auth.logout()
+      return
+    }
     addSystem('连接已断开')
   }
 
@@ -65,6 +72,10 @@ function handleMessage(data: any) {
   const type = data.type || ''
 
   switch (type) {
+    case 'authenticated':
+      connected.value = true
+      addSystem('已连接到 AI 旅行规划助手')
+      break
     case 'agent_start':
       messages.value.push({
         id: `agent-${data.agent}-${Date.now()}`,

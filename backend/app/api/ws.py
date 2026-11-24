@@ -12,10 +12,8 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 from pydantic import BaseModel
 
-from app.db.database import async_session
-from app.services.trip_store import save_trip
-from app.services.auth_service import decode_access_token
-from app.graph.travel_graph import travel_graph, AGENT_DISPLAY_NAMES
+from app.api.deps import authenticate_user
+from app.graph.travel_graph import AGENT_DISPLAY_NAMES, planning_config, travel_graph
 from app.graph.nodes.clarify import clarify_node
 
 logger = logging.getLogger(__name__)
@@ -60,7 +58,8 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
     """Bidirectional WebSocket for travel planning chat.
 
     Client → Server messages:
-      {"type": "start", "query": "...", "user_id": "..."}
+      {"type": "auth", "token": "..."} (first message)
+      {"type": "start", "query": "..."}
          Start a new travel planning graph.
       {"type": "chat", "query": "...", "history": [...], "travel_request": {...}}
          Free-form chat to clarify/pre-fill before planning.
@@ -81,13 +80,23 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
     """
     await ws.accept()
 
-    # Extract JWT from query params
-    token = ws.query_params.get("token", "")
-    user_id = "anonymous"
-    if token:
-        decoded = decode_access_token(token)
-        if decoded:
-            user_id = decoded
+    try:
+        message = await asyncio.wait_for(ws.receive(), timeout=10)
+        if message["type"] == "websocket.disconnect":
+            return
+        auth_message = json.loads(message.get("text") or "")
+    except (TimeoutError, ValueError):
+        auth_message = None
+
+    token = None
+    if isinstance(auth_message, dict) and auth_message.get("type") == "auth":
+        token = auth_message.get("token")
+    user_id = await authenticate_user(token) if isinstance(token, str) and token else None
+    if user_id is None:
+        await ws.close(code=1008, reason="请登录后使用旅游服务")
+        return
+
+    await ws.send_json({"type": "authenticated"})
     logger.info(f"[WS] Connected: thread_id={thread_id}, user_id={user_id}")
 
     graph_task: asyncio.Task | None = None
@@ -157,7 +166,7 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
     # Start the send loop as a background task
     sender = asyncio.create_task(send_loop())
 
-    config = {"configurable": {"thread_id": thread_id}}
+    config = planning_config(user_id, thread_id)
 
     try:
         while True:
@@ -173,10 +182,6 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
             if msg_type == "start":
                 # Start new planning
                 query = msg.get("query", "")
-                # Allow message body to override user_id (JWT from query params is default)
-                msg_user_id = msg.get("user_id", "")
-                if msg_user_id and user_id == "anonymous":
-                    user_id = msg_user_id
                 prefill = msg.get("travel_request", None)
 
                 if not query:
@@ -257,6 +262,11 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
 
             elif msg_type == "resume":
                 # Resume paused graph
+                snapshot = await travel_graph.aget_state(config)
+                if snapshot.values.get("user_id") != user_id:
+                    await event_queue.put({"type": "error", "message": "规划会话不存在"})
+                    continue
+
                 action = msg.get("action", "approve")
                 feedback = msg.get("feedback", "")
                 edits = msg.get("edits", None)

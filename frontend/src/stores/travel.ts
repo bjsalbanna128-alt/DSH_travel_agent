@@ -4,7 +4,7 @@ import type {
   Itinerary, DayPlan, ApprovalRequest, ChatMessage,
   VersionInfo, ProgressInfo,
 } from '../types/travel'
-import { streamTravelPlanning, clarifyRequest } from '../api/travel'
+import { streamTravelPlanning, clarifyRequest, travelFetch } from '../api/travel'
 import type { ClarifyResponse } from '../api/travel'
 
 export const useTravelStore = defineStore('travel', () => {
@@ -51,7 +51,12 @@ export const useTravelStore = defineStore('travel', () => {
   }
 
   // ── Clarification action ────────────────────────────
+  let clarificationController: AbortController | undefined
+
   async function sendClarifyMessage(query: string) {
+    clarificationController?.abort()
+    const controller = new AbortController()
+    clarificationController = controller
     isClarifying.value = true
     clarifyMessages.value.push({ role: 'user', content: query })
 
@@ -61,7 +66,8 @@ export const useTravelStore = defineStore('travel', () => {
         history: clarifyMessages.value.slice(0, -1), // exclude the just-added message
         travel_request: clarifyTravelRequest.value,
         thread_id: clarifyThreadId.value ?? undefined,
-      })
+      }, controller.signal)
+      if (controller.signal.aborted) return null
 
       clarifyMessages.value.push({ role: 'agent', content: result.message })
       clarifyTravelRequest.value = result.travel_request
@@ -76,6 +82,7 @@ export const useTravelStore = defineStore('travel', () => {
 
       return result
     } catch (e: any) {
+      if (controller.signal.aborted) return null
       isClarifying.value = false
       clarifyMessages.value.push({ role: 'agent', content: `抱歉，出错了：${e.message}` })
       return null
@@ -120,24 +127,13 @@ export const useTravelStore = defineStore('travel', () => {
   ): AbortController {
     const controller = new AbortController()
 
-    const token = localStorage.getItem('travel_auth_token')
-    const authHeaders: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (token) authHeaders['Authorization'] = `Bearer ${token}`
-
-    let userId = 'anonymous'
-    try {
-      const user = JSON.parse(localStorage.getItem('travel_auth_user') || 'null')
-      userId = user?.user_id || 'anonymous'
-    } catch { /* keep anonymous */ }
-
-    fetch('/api/v1/trips/stream', {
+    travelFetch('/api/v1/trips/stream', {
       method: 'POST',
-      headers: authHeaders,
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         query,
         thread_id: tid || crypto.randomUUID(),
         travel_request: travelRequest,
-        user_id: userId,
       }),
       signal: controller.signal,
     })
@@ -231,6 +227,8 @@ export const useTravelStore = defineStore('travel', () => {
   }
 
   function resetClarify() {
+    clarificationController?.abort()
+    clarificationController = undefined
     clarifyMessages.value = []
     clarifyTravelRequest.value = null
     clarifyThreadId.value = null

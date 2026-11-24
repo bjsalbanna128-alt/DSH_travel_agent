@@ -38,7 +38,7 @@ function goToTrip(tripId: string) {
     <div class="page-header">
       <el-button text @click="router.push('/')">← 首页</el-button>
       <h1>{{ auth.username || '我的' }}</h1>
-      <el-button v-if="auth.isLoggedIn" text type="danger" size="small" @click="auth.logout(); router.push('/')">退出登录</el-button>
+      <el-button v-if="auth.isLoggedIn" text type="danger" size="small" @click="auth.logout()">退出登录</el-button>
       <div v-else />
     </div>
 

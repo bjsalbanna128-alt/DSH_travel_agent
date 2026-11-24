@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const auth = useAuthStore()
 
 const username = ref('')
@@ -20,7 +21,11 @@ async function handleLogin() {
   error.value = ''
   try {
     await auth.login(username.value, password.value)
-    router.push('/')
+    const redirect = route.query.redirect
+    const target = typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
+      ? router.resolve(redirect)
+      : null
+    await router.replace(target?.matched.length && !target.meta.public ? target.fullPath : '/')
   } catch (e: any) {
     error.value = e.message || '登录失败'
   } finally {

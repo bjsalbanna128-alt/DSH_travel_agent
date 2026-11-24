@@ -6,6 +6,7 @@ import uuid
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from app.api.deps import CurrentUserId
 from app.graph.nodes.clarify import clarify_node
 
 logger = logging.getLogger(__name__)
@@ -13,7 +14,7 @@ router = APIRouter(tags=["chat"])
 
 
 @router.post("/v1/chat/clarify")
-async def clarify(request: Request):
+async def clarify(request: Request, _user_id: CurrentUserId):
     """Multi-turn clarification endpoint. Returns ask/ready with updated travel_request."""
     body = await request.json()
     user_input = body.get("query", "")

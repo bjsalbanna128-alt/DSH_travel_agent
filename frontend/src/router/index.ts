@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { useAuthStore } from '../stores/auth'
 
 const router = createRouter({
   history: createWebHistory(),
@@ -41,14 +42,22 @@ const router = createRouter({
     {
       path: '/login',
       name: 'login',
+      meta: { public: true },
       component: () => import('../views/LoginPage.vue'),
     },
     {
       path: '/register',
       name: 'register',
+      meta: { public: true },
       component: () => import('../views/RegisterPage.vue'),
     },
   ],
+})
+
+router.beforeEach((to) => {
+  if (!to.meta.public && !useAuthStore().isLoggedIn) {
+    return { name: 'login', query: { redirect: to.fullPath } }
+  }
 })
 
 export default router

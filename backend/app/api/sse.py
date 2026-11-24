@@ -7,17 +7,16 @@ import uuid
 from datetime import datetime, time as dt_time
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
+from app.api.deps import CurrentUserId
 from app.db.database import async_session
-from app.services.trip_store import save_trip
-from app.services.auth_service import decode_access_token
+from app.services.trip_store import TripThreadConflict, save_trip
 from langgraph.types import Command
 from pydantic import BaseModel
 
-from app.graph.travel_graph import travel_graph
-from app.graph.travel_graph import AGENT_DISPLAY_NAMES
+from app.graph.travel_graph import AGENT_DISPLAY_NAMES, planning_config, travel_graph
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["streaming"])
@@ -40,23 +39,15 @@ def _sse(event: str, data: dict) -> str:
 
 
 @router.post("/v1/trips/stream")
-async def stream_travel_planning(request: Request):
+async def stream_travel_planning(request: Request, user_id: CurrentUserId):
     """Submit a travel query and stream agent progress via SSE."""
     body = await request.json()
     query = body.get("query", "")
     thread_id = body.get("thread_id", str(uuid.uuid4()))
     prefill_travel_request = body.get("travel_request", None)
 
-    # Extract user_id from JWT or use body-provided or fallback to anonymous
-    user_id = "anonymous"
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-        decoded = decode_access_token(token)
-        if decoded:
-            user_id = decoded
-    if user_id == "anonymous":
-        user_id = body.get("user_id", "anonymous")
+    if not isinstance(thread_id, str) or not 1 <= len(thread_id) <= 100:
+        raise HTTPException(status_code=422, detail="无效的规划会话标识")
 
     if not query:
         return StreamingResponse(
@@ -89,7 +80,7 @@ async def stream_travel_planning(request: Request):
         initial_state["skip_parse"] = True
 
     async def event_generator():
-        config = {"configurable": {"thread_id": thread_id}}
+        config = planning_config(user_id, thread_id)
         last_node = None
         final_state: dict = {}
 
@@ -193,6 +184,9 @@ async def stream_travel_planning(request: Request):
                         await db.commit()
                         trip_id = trip.id
                         logger.info(f"[SSE] Trip saved: {trip_id}")
+                except TripThreadConflict:
+                    yield _sse("error", {"message": "该规划会话标识已被使用，请创建新规划"})
+                    return
                 except Exception as e:
                     logger.error(f"[SSE] Failed to save trip: {e}")
 
@@ -245,7 +239,7 @@ async def stream_travel_planning(request: Request):
 
 
 @router.post("/v1/trips/resume")
-async def resume_travel_planning(request: Request):
+async def resume_travel_planning(request: Request, user_id: CurrentUserId):
     """Resume a paused graph after user approval/feedback."""
     body = await request.json()
     thread_id = body.get("thread_id", "")
@@ -259,13 +253,19 @@ async def resume_travel_planning(request: Request):
             media_type="text/event-stream",
         )
 
+    if not isinstance(thread_id, str) or len(thread_id) > 100:
+        raise HTTPException(status_code=422, detail="无效的规划会话标识")
+
+    config = planning_config(user_id, thread_id)
+    snapshot = await travel_graph.aget_state(config)
+    if snapshot.values.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="规划会话不存在")
+
     user_decision: dict[str, Any] = {"action": action, "feedback": feedback}
     if edits:
         user_decision["edits"] = edits
 
     async def event_generator():
-        config = {"configurable": {"thread_id": thread_id}}
-
         try:
             async for event in travel_graph.astream(Command(resume=user_decision), config):
                 for node_name, node_output in event.items():

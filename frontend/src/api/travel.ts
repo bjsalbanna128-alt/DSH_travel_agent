@@ -3,26 +3,18 @@
 // ═══════════════════════════════════════════════════════
 
 import type { SSECallbacks, ApprovalRequest } from '../types/travel'
+import { useAuthStore } from '../stores/auth'
 
 const API_BASE = '/api/v1'
 
-function _getToken(): string | null {
-  return localStorage.getItem('travel_auth_token')
-}
-
-function _getUserId(): string {
-  try {
-    const user = JSON.parse(localStorage.getItem('travel_auth_user') || 'null')
-    return user?.user_id || 'anonymous'
-  } catch {
-    return 'anonymous'
-  }
-}
-
-function _authHeaders(): Record<string, string> {
-  const token = _getToken()
-  if (token) return { Authorization: `Bearer ${token}` }
-  return {}
+export async function travelFetch(url: string, init?: RequestInit): Promise<Response> {
+  const auth = useAuthStore()
+  const token = auth.token
+  const headers = new Headers(init?.headers)
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const response = await fetch(url, { ...init, headers })
+  if (response.status === 401 && auth.token === token) auth.logout()
+  return response
 }
 
 // ── Clarification ─────────────────────────────────────
@@ -43,11 +35,12 @@ export interface ClarifyInput {
   thread_id?: string
 }
 
-export async function clarifyRequest(input: ClarifyInput): Promise<ClarifyResponse> {
-  const res = await fetch(`${API_BASE}/chat/clarify`, {
+export async function clarifyRequest(input: ClarifyInput, signal?: AbortSignal): Promise<ClarifyResponse> {
+  const res = await travelFetch(`${API_BASE}/chat/clarify`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ..._authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
+    signal,
   })
   if (!res.ok) {
     throw new Error(`Clarify failed: ${res.status}`)
@@ -64,13 +57,12 @@ export function streamTravelPlanning(
 ): AbortController {
   const controller = new AbortController()
 
-  fetch(`${API_BASE}/trips/stream`, {
+  travelFetch(`${API_BASE}/trips/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ..._authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       query,
       thread_id: threadId || crypto.randomUUID(),
-      user_id: _getUserId(),
     }),
     signal: controller.signal,
   })
@@ -148,9 +140,9 @@ export function streamResumePlanning(
 ): AbortController {
   const controller = new AbortController()
 
-  fetch(`${API_BASE}/trips/resume`, {
+  travelFetch(`${API_BASE}/trips/resume`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ..._authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       thread_id: threadId,
       action,
@@ -201,36 +193,30 @@ export function streamResumePlanning(
   return controller
 }
 
-export async function getTrip(tripId: string) {
-  const res = await fetch(`${API_BASE}/trips/${tripId}`, {
-    headers: _authHeaders(),
-  })
+export async function getTrip(tripId: string, signal?: AbortSignal) {
+  const res = await travelFetch(`${API_BASE}/trips/${tripId}`, { signal })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }
 
 export async function listTrips(): Promise<any[]> {
-  const res = await fetch(`${API_BASE}/trips?user_id=${_getUserId()}`, {
-    headers: _authHeaders(),
-  })
+  const res = await travelFetch(`${API_BASE}/trips`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = await res.json()
   return data.trips || []
 }
 
 export async function getTripVersions(tripId: string): Promise<any[]> {
-  const res = await fetch(`${API_BASE}/trips/${tripId}/versions`, {
-    headers: _authHeaders(),
-  })
+  const res = await travelFetch(`${API_BASE}/trips/${tripId}/versions`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   const data = await res.json()
   return data.versions || []
 }
 
 export async function updateTrip(tripId: string, itinerary: Record<string, any>) {
-  const res = await fetch(`${API_BASE}/trips/${tripId}`, {
+  const res = await travelFetch(`${API_BASE}/trips/${tripId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json', ..._authHeaders() },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ itinerary }),
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -238,9 +224,7 @@ export async function updateTrip(tripId: string, itinerary: Record<string, any>)
 }
 
 export async function getProfile(): Promise<any> {
-  const res = await fetch(`${API_BASE}/profile?user_id=${_getUserId()}`, {
-    headers: _authHeaders(),
-  })
+  const res = await travelFetch(`${API_BASE}/profile`)
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
 }

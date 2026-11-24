@@ -11,11 +11,15 @@ from app.db.models import Trip, TripVersion
 logger = logging.getLogger(__name__)
 
 
+class TripThreadConflict(Exception):
+    """The thread ID is already assigned to another account's trip."""
+
+
 async def save_trip(
     db: AsyncSession,
     thread_id: str,
     trip_data: dict,
-    user_id: str = "anonymous",
+    user_id: str,
 ) -> Trip:
     """Create or update a trip record."""
     # Check if trip already exists for this thread_id
@@ -23,6 +27,8 @@ async def save_trip(
         select(Trip).where(Trip.thread_id == thread_id)
     )
     existing = result.scalar_one_or_none()
+    if existing is not None and existing.user_id != user_id:
+        raise TripThreadConflict
 
     itinerary = trip_data.get("itinerary", trip_data)
     travel_request = trip_data.get("travel_request", {})
@@ -69,10 +75,14 @@ async def save_trip(
     return trip
 
 
-async def get_trip(db: AsyncSession, trip_id: str) -> dict | None:
+async def _find_owned_trip(db: AsyncSession, trip_id: str, user_id: str) -> Trip | None:
+    result = await db.execute(select(Trip).where(Trip.id == trip_id, Trip.user_id == user_id))
+    return result.scalar_one_or_none()
+
+
+async def get_trip(db: AsyncSession, trip_id: str, *, user_id: str) -> dict | None:
     """Load a single trip by ID."""
-    result = await db.execute(select(Trip).where(Trip.id == trip_id))
-    trip = result.scalar_one_or_none()
+    trip = await _find_owned_trip(db, trip_id, user_id)
     if not trip:
         return None
     return _trip_to_dict(trip)
@@ -80,7 +90,7 @@ async def get_trip(db: AsyncSession, trip_id: str) -> dict | None:
 
 async def list_trips(
     db: AsyncSession,
-    user_id: str = "anonymous",
+    user_id: str,
     limit: int = 20,
 ) -> list[dict]:
     """List recent trips for a user."""
@@ -94,8 +104,12 @@ async def list_trips(
     return [_trip_to_dict(t) for t in trips]
 
 
-async def get_trip_versions(db: AsyncSession, trip_id: str) -> list[dict]:
+async def get_trip_versions(
+    db: AsyncSession, trip_id: str, *, user_id: str
+) -> list[dict] | None:
     """List all versions of a trip."""
+    if await _find_owned_trip(db, trip_id, user_id) is None:
+        return None
     result = await db.execute(
         select(TripVersion)
         .where(TripVersion.trip_id == trip_id)
@@ -113,8 +127,14 @@ async def get_trip_versions(db: AsyncSession, trip_id: str) -> list[dict]:
     ]
 
 
-async def rollback_trip(db: AsyncSession, trip_id: str, version: int) -> dict | None:
+async def rollback_trip(
+    db: AsyncSession, trip_id: str, version: int, *, user_id: str
+) -> dict | None:
     """Rollback trip to a specific version."""
+    trip = await _find_owned_trip(db, trip_id, user_id)
+    if trip is None:
+        return None
+
     # Find the version
     result = await db.execute(
         select(TripVersion)
@@ -125,11 +145,6 @@ async def rollback_trip(db: AsyncSession, trip_id: str, version: int) -> dict | 
         return None
 
     # Update trip with version's itinerary
-    trip_result = await db.execute(select(Trip).where(Trip.id == trip_id))
-    trip = trip_result.scalar_one_or_none()
-    if not trip:
-        return None
-
     trip.itinerary = ver.itinerary
     trip.version = version
     trip.updated_at = datetime.utcnow()
@@ -138,10 +153,11 @@ async def rollback_trip(db: AsyncSession, trip_id: str, version: int) -> dict | 
     return _trip_to_dict(trip)
 
 
-async def update_trip(db: AsyncSession, trip_id: str, itinerary: dict) -> dict | None:
+async def update_trip(
+    db: AsyncSession, trip_id: str, itinerary: dict, *, user_id: str
+) -> dict | None:
     """Save edited itinerary as a new version."""
-    result = await db.execute(select(Trip).where(Trip.id == trip_id))
-    trip = result.scalar_one_or_none()
+    trip = await _find_owned_trip(db, trip_id, user_id)
     if not trip:
         return None
 

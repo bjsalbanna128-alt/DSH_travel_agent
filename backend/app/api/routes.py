@@ -6,16 +6,16 @@ from sqlalchemy import select
 
 from app.db.database import get_db, async_session
 from app.db.models import UserProfile
-from app.api.deps import get_current_user
+from app.api.deps import CurrentUserId
 from app.services import trip_store
 
 router = APIRouter(prefix="/v1", tags=["api"])
 
 
 @router.get("/trips/{trip_id}")
-async def get_trip(trip_id: str, db: AsyncSession = Depends(get_db)):
+async def get_trip(trip_id: str, user_id: CurrentUserId, db: AsyncSession = Depends(get_db)):
     """Retrieve a trip by ID."""
-    trip = await trip_store.get_trip(db, trip_id)
+    trip = await trip_store.get_trip(db, trip_id, user_id=user_id)
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
     return trip
@@ -23,7 +23,7 @@ async def get_trip(trip_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/trips")
 async def list_trips(
-    user_id: str = Depends(get_current_user),
+    user_id: CurrentUserId,
     limit: int = 20,
     db: AsyncSession = Depends(get_db),
 ):
@@ -33,9 +33,11 @@ async def list_trips(
 
 
 @router.get("/trips/{trip_id}/versions")
-async def list_versions(trip_id: str, db: AsyncSession = Depends(get_db)):
+async def list_versions(trip_id: str, user_id: CurrentUserId, db: AsyncSession = Depends(get_db)):
     """List itinerary versions for a trip."""
-    versions = await trip_store.get_trip_versions(db, trip_id)
+    versions = await trip_store.get_trip_versions(db, trip_id, user_id=user_id)
+    if versions is None:
+        raise HTTPException(status_code=404, detail="Trip not found")
     return {"trip_id": trip_id, "versions": versions}
 
 
@@ -43,22 +45,25 @@ async def list_versions(trip_id: str, db: AsyncSession = Depends(get_db)):
 async def rollback_trip(
     trip_id: str,
     version: int,
+    user_id: CurrentUserId,
     db: AsyncSession = Depends(get_db),
 ):
     """Roll back to a specific itinerary version."""
-    trip = await trip_store.rollback_trip(db, trip_id, version)
+    trip = await trip_store.rollback_trip(db, trip_id, version, user_id=user_id)
     if not trip:
         raise HTTPException(status_code=404, detail="Trip or version not found")
     return trip
 
 
 @router.put("/trips/{trip_id}")
-async def update_trip(trip_id: str, body: dict, db: AsyncSession = Depends(get_db)):
+async def update_trip(
+    trip_id: str, body: dict, user_id: CurrentUserId, db: AsyncSession = Depends(get_db)
+):
     """Save edited itinerary as a new version."""
     itinerary = body.get("itinerary")
     if not itinerary:
         raise HTTPException(status_code=400, detail="itinerary is required")
-    trip = await trip_store.update_trip(db, trip_id, itinerary)
+    trip = await trip_store.update_trip(db, trip_id, itinerary, user_id=user_id)
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
     return trip
@@ -66,7 +71,7 @@ async def update_trip(trip_id: str, body: dict, db: AsyncSession = Depends(get_d
 
 @router.get("/profile")
 async def get_profile(
-    user_id: str = Depends(get_current_user),
+    user_id: CurrentUserId,
 ):
     """Get user travel preference profile."""
     try:

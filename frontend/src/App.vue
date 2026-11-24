@@ -1,10 +1,23 @@
 <script setup lang="ts">
+import { watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useTravelStore } from './stores/travel'
 import { useAuthStore } from './stores/auth'
 import ApprovalDialog from './components/ApprovalDialog.vue'
 
 const store = useTravelStore()
 const auth = useAuthStore()
+const route = useRoute()
+const router = useRouter()
+
+watch(() => auth.token, () => {
+  store.cancelPlanning()
+  store.reset()
+  store.resetClarify()
+  if (!auth.isLoggedIn && !route.meta.public) {
+    void router.replace({ name: 'login', query: { redirect: route.fullPath } })
+  }
+})
 </script>
 
 <template>

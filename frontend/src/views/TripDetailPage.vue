@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTravelStore } from '../stores/travel'
 import { getTrip } from '../api/travel'
@@ -10,12 +10,12 @@ const route = useRoute()
 const router = useRouter()
 const store = useTravelStore()
 
-const tripId = route.params.tripId as string
+const tripId = computed(() => route.params.tripId as string)
 const activeDay = ref(1)
 const loading = ref(false)
 
-const itinerary = computed(() => store.itinerary)
-const dayPlans = computed(() => store.dayPlans)
+const itinerary = computed(() => store.currentTripId === tripId.value ? store.itinerary : null)
+const dayPlans = computed(() => store.currentTripId === tripId.value ? store.dayPlans : [])
 
 const currentDay = computed<DayPlan | null>(() =>
   dayPlans.value.find(d => d.day === activeDay.value) ?? null
@@ -25,24 +25,27 @@ const isEmpty = computed(() =>
   !loading.value && (!itinerary.value || dayPlans.value.length === 0)
 )
 
-onMounted(async () => {
-  // If store is empty, load from API (e.g. coming from history page)
-  if (!store.itinerary || store.dayPlans.length === 0) {
-    loading.value = true
-    try {
-      const trip = await getTrip(tripId)
-      if (trip.itinerary) {
-        store.itinerary = trip.itinerary
-        store.dayPlans = trip.itinerary.day_plans || []
-        store.currentTripId = tripId
-      }
-    } catch (e: any) {
-      console.error('Failed to load trip:', e)
-    } finally {
-      loading.value = false
-    }
+watch(tripId, async (id, _, onCleanup) => {
+  if (!id || (itinerary.value && dayPlans.value.length > 0)) {
+    loading.value = false
+    return
   }
-})
+  const controller = new AbortController()
+  onCleanup(() => controller.abort())
+  loading.value = true
+  try {
+    const trip = await getTrip(id, controller.signal)
+    if (!controller.signal.aborted && trip.itinerary) {
+      store.itinerary = trip.itinerary
+      store.dayPlans = trip.itinerary.day_plans || []
+      store.currentTripId = id
+    }
+  } catch (e: unknown) {
+    if (!controller.signal.aborted) console.error('Failed to load trip:', e)
+  } finally {
+    if (!controller.signal.aborted) loading.value = false
+  }
+}, { immediate: true })
 
 function formatPrice(v: number): string {
   return v > 0 ? `¥${v.toLocaleString()}` : '—'
