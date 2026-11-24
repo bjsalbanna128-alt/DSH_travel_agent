@@ -66,7 +66,7 @@ async def rollback_trip(
     try:
         trip = await trip_store.rollback_trip(db, trip_id, version, user_id=user_id)
     except trip_store.TripRevisionConflict as exc:
-        raise HTTPException(status_code=409, detail="请先确认行程") from exc
+        raise HTTPException(status_code=409, detail="行程待确认或版本已变化，请刷新后重试") from exc
     if not trip:
         raise HTTPException(status_code=404, detail="Trip or version not found")
     return trip
@@ -83,7 +83,7 @@ async def update_trip(
     try:
         trip = await trip_store.update_trip(db, trip_id, itinerary, user_id=user_id)
     except trip_store.TripRevisionConflict as exc:
-        raise HTTPException(status_code=409, detail="请先确认行程") from exc
+        raise HTTPException(status_code=409, detail="行程待确认或版本已变化，请刷新后重试") from exc
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
     return trip

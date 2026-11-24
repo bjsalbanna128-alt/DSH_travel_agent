@@ -2,7 +2,6 @@
 
 import json
 import logging
-from datetime import datetime
 
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 
@@ -27,7 +26,7 @@ CLARIFY_SYSTEM_PROMPT = """你是一个旅行规划顾问。你的任务是通�
 - 只要知道目的地+天数，就可以返回 ready。人数、预算、偏好、节奏都有合理默认值
 - "和兄弟/和闺蜜"等暗示了人数和偏好，直接推断无需追问
 - 用户说预算数字时直接用，不要追问人均还是总计
-- 最多追问 1 轮，如果第 2 轮用户还没说清楚，也不再追问
+- 沿用已收集的信息，用户明确更正时才覆盖。仍缺少目的地或天数时继续追问
 
 ## 当前已收集的信息
 {current_state}
@@ -66,10 +65,7 @@ async def clarify_node(
     hist = json.dumps(history, ensure_ascii=False, indent=2) if history else "[]"
     turn = len([h for h in history if h.get("role") == "user"])
 
-    # Cap turns at 2 — force ready on 2nd turn
     system = CLARIFY_SYSTEM_PROMPT.replace("{current_state}", current).replace("{history}", hist)
-    if turn >= 1:
-        system += f"\n\n现在是第{turn + 1}轮（最后一轮），必须返回 action=ready，不要再追问。"
 
     raw = await llm.chat(
         system_prompt=system,
@@ -83,7 +79,7 @@ async def clarify_node(
     # Merge travel_request first
     merged = travel_request.copy() if travel_request else {}
     new_req = data.get("travel_request", {})
-    for key in ["destination", "days", "adults", "children", "elderly",
+    for key in ["destination", "adults", "children", "elderly",
                 "preferences", "special_requirements", "departure_city",
                 "travel_time", "pace"]:
         if new_req.get(key) not in (None, "", 0, []):
@@ -91,29 +87,26 @@ async def clarify_node(
     if new_req.get("budget_total", 0) > 0:
         merged["budget_total"] = new_req["budget_total"]
 
-    # If destination + days are known, don't keep asking
-    if merged.get("destination") and merged.get("days", 0) > 0:
-        data["action"] = "ready"
-        if not data.get("message") or data["action"] == "ask":
-            preferences = merged.get("preferences", [])
-            pref_str = "、".join(preferences) if preferences else "综合体验"
-            pace_map = {"relaxed": "轻松悠闲", "moderate": "适中", "intensive": "紧凑打卡"}
-            pace_str = pace_map.get(merged.get("pace", "moderate"), "适中")
-            data["message"] = f"好的！{merged['destination']}{merged['days']}天{pref_str}之旅，节奏{pace_str}。马上为你规划！"
+    for candidate in (new_req.get("days"), merged.get("days")):
+        if isinstance(candidate, (int, str)) and not isinstance(candidate, bool):
+            if str(candidate).isascii() and str(candidate).isdecimal() and int(candidate) > 0:
+                merged["days"] = int(candidate)
+                break
+    else:
+        merged.pop("days", None)
 
-    # Force ready on 2nd turn
-    if turn >= 1:
-        data["action"] = "ready"
-        if not data.get("message"):
-            data["message"] = "信息已经收集得差不多了，马上为你规划行程！"
-
-    # Log and return
-    logger.info(f"Clarify turn={turn+1} action={data['action']} dest={merged.get('destination')} days={merged.get('days')}")
+    missing = [field for field in ("destination", "days") if not merged.get(field)]
+    action = "ask" if missing else "ready"
+    if missing:
+        message = "你想去哪个城市或目的地？" if missing[0] == "destination" else "你计划玩几天？"
+    else:
+        message = f"好的，已收齐{merged['destination']}{merged['days']}天的旅行需求，可以开始规划。"
+    logger.info("Clarify turn=%s action=%s missing=%s", turn + 1, action, missing)
 
     return {
-        "action": data.get("action", "ready"),
-        "message": data.get("message", ""),
+        "action": action,
+        "message": message,
         "travel_request": merged,
-        "missing_fields": data.get("missing_fields", []),
+        "missing_fields": missing,
         "turn": turn + 1,
     }

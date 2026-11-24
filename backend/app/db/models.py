@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, String, Integer, Float, DateTime, JSON, Text
+from sqlalchemy import Column, String, Integer, Float, DateTime, Index, JSON, Text
 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 
 from app.db.database import Base
@@ -44,6 +44,7 @@ class Trip(Base):
 
 class TripVersion(Base):
     __tablename__ = "trip_versions"
+    __table_args__ = (Index("uq_trip_versions_trip_id_version", "trip_id", "version", unique=True),)
 
     id = Column(String(36), primary_key=True, default=_gen_id)
     trip_id = Column(String(36), nullable=False)

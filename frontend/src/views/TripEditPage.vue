@@ -3,7 +3,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getTrip, updateTrip } from '../api/travel'
-import type { DayPlan, Attraction, Hotel, Restaurant, Itinerary } from '../types/travel'
+import { itineraryBudget } from '../itineraryBudget'
+import type { DayPlan, Attraction, Hotel, Restaurant, Itinerary, TripRecord } from '../types/travel'
 
 const route = useRoute()
 const router = useRouter()
@@ -15,6 +16,8 @@ const activeDay = ref(1)
 
 const itinerary = ref<Itinerary | null>(null)
 const dayPlans = ref<DayPlan[]>([])
+const travelRequest = ref<TripRecord['travel_request']>()
+const otherBudget = ref(0)
 
 // Track drag state
 const dragDay = ref(0)
@@ -39,16 +42,8 @@ const currentDay = computed<DayPlan | null>(() =>
 )
 
 const budgetItems = computed(() => {
-  if (!dayPlans.value.length) return { tickets: 0, hotels: 0, meals: 0, total: 0 }
-  let tickets = 0, hotels = 0, meals = 0
-  dayPlans.value.forEach(dp => {
-    dp.attractions?.forEach(a => { tickets += a.ticket_price_cny || 0 })
-    if (dp.hotel) hotels += dp.hotel.price_per_night_cny || 0
-    if (dp.lunch) meals += dp.lunch.avg_price_per_person_cny || 0
-    if (dp.dinner) meals += dp.dinner.avg_price_per_person_cny || 0
-  })
-  const total = tickets + hotels + meals
-  return { tickets, hotels, meals, total }
+  const budget = itineraryBudget(dayPlans.value, travelRequest.value)
+  return { ...budget, total: Math.round((budget.total + otherBudget.value) * 100) / 100 }
 })
 
 onMounted(async () => {
@@ -58,6 +53,9 @@ onMounted(async () => {
     if (trip.itinerary) {
       itinerary.value = trip.itinerary
       dayPlans.value = JSON.parse(JSON.stringify(trip.itinerary.day_plans || []))
+      travelRequest.value = trip.travel_request
+      otherBudget.value = Math.max(0, trip.itinerary.total_budget_estimate_cny
+        - itineraryBudget(dayPlans.value, travelRequest.value).total)
     }
   } catch (e: any) {
     ElMessage.error('加载行程失败: ' + (e.message || '未知错误'))
@@ -344,6 +342,14 @@ async function goBack() {
         <div class="budget-item">
           <span class="budget-item-label">餐饮</span>
           <span class="budget-item-value">{{ formatPrice(budgetItems.meals) }}</span>
+        </div>
+        <div class="budget-item">
+          <span class="budget-item-label">交通</span>
+          <span class="budget-item-value">{{ formatPrice(budgetItems.transport) }}</span>
+        </div>
+        <div v-if="otherBudget > 0.005" class="budget-item">
+          <span class="budget-item-label">其他预估费用</span>
+          <span class="budget-item-value">{{ formatPrice(otherBudget) }}</span>
         </div>
         <div class="budget-item budget-item-total">
           <span class="budget-item-label">合计</span>

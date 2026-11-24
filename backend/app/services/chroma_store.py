@@ -18,6 +18,12 @@ COLLECTIONS = ["attractions", "hotels", "restaurants", "trip_episodes"]
 _chroma_store_instance: Optional["ChromaStore"] = None
 
 
+def _metadata_where(filters: dict[str, Any]) -> dict[str, Any] | None:
+    if len(filters) > 1:
+        return {"$and": [{field: value} for field, value in filters.items()]}
+    return filters or None
+
+
 class ChromaStore:
     """Persistent ChromaDB client managing 4 collections:
 
@@ -117,7 +123,7 @@ class ChromaStore:
         results = self._attractions.query(
             query_embeddings=[q_embed],
             n_results=k,
-            where=where if where else None,
+            where=_metadata_where(where),
         )
 
         items: list[dict] = []
@@ -178,7 +184,7 @@ class ChromaStore:
 
         results = self._hotels.query(
             query_embeddings=[q_embed], n_results=k,
-            where=where if where else None,
+            where=_metadata_where(where),
         )
         items: list[dict] = []
         if not results["ids"] or not results["ids"][0]:
@@ -235,7 +241,7 @@ class ChromaStore:
 
         results = self._restaurants.query(
             query_embeddings=[q_embed], n_results=k,
-            where=where if where else None,
+            where=_metadata_where(where),
         )
         items: list[dict] = []
         if not results["ids"] or not results["ids"][0]:

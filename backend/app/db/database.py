@@ -36,9 +36,13 @@ class Base(DeclarativeBase):
 async def init_db():
     """Create all tables."""
     # Ensure all models are imported so they register with Base.metadata
-    import app.db.models  # noqa: F401
+    from app.db.trip_version_migration import ensure_trip_version_index
+
     async with engine.begin() as conn:
+        if conn.dialect.name == "sqlite":
+            await conn.exec_driver_sql("BEGIN IMMEDIATE")
         await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(ensure_trip_version_index)
     print(f"[DB] Initialized at {DB_PATH}")
 
 

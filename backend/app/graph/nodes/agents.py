@@ -229,7 +229,7 @@ def _route_distance(ordered: list[dict]) -> float:
 def _estimate_travel(km: float, pace: str) -> tuple[str, int]:
     """Estimate travel mode and minutes from distance."""
     if km < 2:
-        return "walking", int(km / 0.08 * 12)
+        return "walking", round(km / 0.08)
     elif km < 15:
         return "metro", int(km / 30 * 60 + 15)
     else:
@@ -595,10 +595,14 @@ async def restaurant_node(state: dict) -> dict:
 
 TRANSPORT_SYSTEM_PROMPT = """你是一个交通规划专家。规划城际和城内交通。
 
+每条价格为单人单段的预估价格。只列行程采用的交通段，不列相互替代的方案。
+城际段用 day 标注出行日期序号，去程通常为第 1 天，返程通常为最后一天。
+出发城市未知时保留空的 intercity。intraday 的下标按天排列，无安排的天使用空列表。
+
 ## 输出格式
 {
   "intercity": [
-    {"type": "train", "from_location": "北京", "to_location": "成都", "departure_time": "08:00", "arrival_time": "15:00", "price_cny": 800, "booking_url": ""}
+    {"day": 1, "type": "train", "from_location": "北京", "to_location": "成都", "departure_time": "08:00", "arrival_time": "15:00", "price_cny": 800, "booking_url": ""}
   ],
   "intraday": [
     [

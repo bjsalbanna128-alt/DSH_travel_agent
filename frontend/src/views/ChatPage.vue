@@ -13,6 +13,9 @@ const input = ref('')
 const streaming = ref(false)
 const currentTripId = ref('')
 const travelRequest = ref<Record<string, any> | null>(null)
+const clarificationHistory: { role: 'user' | 'assistant'; content: string }[] = []
+const clarifying = ref(false)
+const readyToPlan = ref(false)
 
 interface ChatMessage {
   id: string
@@ -55,6 +58,7 @@ function connect() {
   socket.onclose = (event) => {
     connected.value = false
     streaming.value = false
+    clarifying.value = false
     if (event.code === 1008 && auth.token === token) {
       auth.logout()
       return
@@ -64,6 +68,7 @@ function connect() {
 
   socket.onerror = () => {
     connected.value = false
+    clarifying.value = false
     addSystem('连接失败，请刷新页面重试', 'error')
   }
 }
@@ -117,14 +122,15 @@ function handleMessage(data: any) {
       break
     }
 
-    case 'clarify':
-      if (data.action === 'ready') {
-        travelRequest.value = data.travel_request || null
-        addAgent(data.message || '已了解您的需求，准备开始规划。')
-      } else {
-        addAgent(data.message || '请提供更多信息...')
-      }
+    case 'clarify': {
+      clarifying.value = false
+      travelRequest.value = data.travel_request || travelRequest.value
+      readyToPlan.value = data.action === 'ready'
+      const reply = data.message || (readyToPlan.value ? '已收齐需求，可以开始规划。' : '请提供更多信息。')
+      clarificationHistory.push({ role: 'assistant', content: reply })
+      addAgent(reply)
       break
+    }
 
     case 'approval_required':
       messages.value.push({
@@ -159,6 +165,7 @@ function handleMessage(data: any) {
     case 'error':
       addSystem(data.message || '发生错误', 'error')
       streaming.value = false
+      clarifying.value = false
       break
 
     case 'cancelled':
@@ -199,7 +206,7 @@ function scrollToBottom() {
 
 function send() {
   const text = input.value.trim()
-  if (!text || !ws.value || !connected.value) return
+  if (!text || !ws.value || !connected.value || clarifying.value || streaming.value) return
 
   // Add user message
   messages.value.push({
@@ -210,21 +217,26 @@ function send() {
     timestamp: Date.now(),
   })
 
-  // If we have travel_request from a previous clarify, send start
-  // Otherwise send chat for clarification
-  if (travelRequest.value) {
-    ws.value.send(JSON.stringify({
-      type: 'start',
-      query: text,
-      travel_request: travelRequest.value,
-    }))
-    travelRequest.value = null
-  } else {
-    ws.value.send(JSON.stringify({ type: 'chat', query: text }))
-  }
+  ws.value.send(JSON.stringify({
+    type: 'chat',
+    query: text,
+    history: clarificationHistory,
+    travel_request: travelRequest.value,
+  }))
+  clarificationHistory.push({ role: 'user', content: text })
+  clarifying.value = true
 
   input.value = ''
   scrollToBottom()
+}
+
+function startPlanning() {
+  if (!ws.value || !connected.value || !readyToPlan.value || !travelRequest.value
+    || clarifying.value || streaming.value) return
+  const query = clarificationHistory.filter(turn => turn.role === 'user').map(turn => turn.content).join('。')
+  ws.value.send(JSON.stringify({ type: 'start', query, travel_request: travelRequest.value }))
+  readyToPlan.value = false
+  streaming.value = true
 }
 
 function goToTrip(id: string) {
@@ -365,18 +377,26 @@ onUnmounted(() => {
 
     <!-- Input -->
     <div class="chat-input-bar">
+      <el-button
+        v-if="readyToPlan"
+        type="primary"
+        :disabled="!connected || clarifying || streaming"
+        @click="startPlanning"
+      >
+        开始规划
+      </el-button>
       <el-input
         v-model="input"
         placeholder="输入旅行需求..."
         size="large"
-        :disabled="!connected || streaming"
+        :disabled="!connected || streaming || clarifying"
         @keydown.enter.exact="send"
       >
         <template #append>
           <el-button
             type="primary"
-            :disabled="!connected || !input.trim() || streaming"
-            :loading="streaming"
+            :disabled="!connected || !input.trim() || streaming || clarifying"
+            :loading="clarifying"
             @click="send"
           >
             发送

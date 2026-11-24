@@ -3,14 +3,19 @@ import { ref, onMounted, watch, onBeforeUnmount } from 'vue'
 import L from 'leaflet'
 import type { DayPlan } from '../types/travel'
 
-// Fix Leaflet default icon paths (broken by bundlers)
 import 'leaflet/dist/leaflet.css'
-// @ts-ignore
-delete L.Icon.Default.prototype._getIconUrl
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+import markerIcon from 'leaflet/dist/images/marker-icon.png?url'
+import markerIconRetina from 'leaflet/dist/images/marker-icon-2x.png?url'
+import markerShadow from 'leaflet/dist/images/marker-shadow.png?url'
+
+const icon = L.icon({
+  iconUrl: markerIcon,
+  iconRetinaUrl: markerIconRetina,
+  shadowUrl: markerShadow,
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41],
 })
 
 const props = defineProps<{ dayPlans: DayPlan[] }>()
@@ -24,13 +29,14 @@ const AMAP_TILE = 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=
 onMounted(() => {
   if (!mapContainer.value) return
 
-  map = L.map(mapContainer.value).setView([30.67, 104.06], 12)
+  map = L.map(mapContainer.value).setView([0, 0], 2)
   L.tileLayer(AMAP_TILE, {
     subdomains: '1234',
     attribution: '&copy; 高德地图',
   }).addTo(map)
 
   markerLayer.addTo(map)
+  renderMarkers()
 })
 
 onBeforeUnmount(() => {
@@ -40,41 +46,42 @@ onBeforeUnmount(() => {
   }
 })
 
-watch(() => props.dayPlans, (plans) => {
-  if (!map || plans.length === 0) return
+function renderMarkers() {
+  if (!map) return
 
   markerLayer.clearLayers()
-
   const allLocs: [number, number][] = []
 
-  plans.forEach((dp) => {
-    dp.attractions?.forEach((a) => {
-      if (a.location?.lat && a.location?.lng) {
-        const pos: [number, number] = [a.location.lat, a.location.lng]
-        allLocs.push(pos)
-        L.marker(pos)
-          .bindPopup(`<b>${a.name}</b><br>${a.description || ''}`)
-          .addTo(markerLayer)
-      }
-    })
+  function addMarker(name: string, location?: { lat: number; lng: number }, description?: string) {
+    if (!location) return
+    const { lat, lng } = location
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)
+      || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) return
 
-    if (dp.hotel?.location?.lat && dp.hotel?.location?.lng) {
-      const pos: [number, number] = [dp.hotel.location.lat, dp.hotel.location.lng]
-      allLocs.push(pos)
-      L.marker(pos, {
-        icon: L.icon({
-          iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-          iconSize: [25, 41],
-          iconAnchor: [12, 41],
-        }),
-      }).bindPopup(`<b>${dp.hotel.name}</b>`).addTo(markerLayer)
-    }
-  })
-
-  if (allLocs.length > 0) {
-    map.fitBounds(L.latLngBounds(allLocs), { padding: [30, 30] })
+    const pos: [number, number] = [lat, lng]
+    allLocs.push(pos)
+    const popup = document.createElement('div')
+    const title = document.createElement('strong')
+    title.textContent = name
+    popup.append(title)
+    if (description) popup.append(document.createElement('br'), description)
+    L.marker(pos, { icon, title: name, alt: name }).bindPopup(popup).addTo(markerLayer)
   }
-}, { deep: true })
+
+  for (const day of props.dayPlans) {
+    for (const attraction of day.attractions ?? []) {
+      addMarker(attraction.name, attraction.location, attraction.description)
+    }
+    if (day.hotel) addMarker(day.hotel.name, day.hotel.location)
+  }
+  if (allLocs.length > 0) {
+    map.fitBounds(L.latLngBounds(allLocs), { padding: [30, 30], maxZoom: 15 })
+  } else {
+    map.setView([0, 0], 2)
+  }
+}
+
+watch(() => props.dayPlans, renderMarkers, { deep: true })
 </script>
 
 <template>

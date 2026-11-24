@@ -12,6 +12,7 @@ from app.core.exceptions import LLMCallError, ParseError
 from app.graph.nodes.agents import _estimate_travel, _route_distance
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from app.schemas.travel_state import Attraction, Hotel, Restaurant, Route, TransportOption
+from app.services.itinerary_costs import estimate_day_cost, traveler_count
 from app.services.trip_store import (
     TripRevisionConflict,
     TripThreadConflict,
@@ -106,13 +107,12 @@ async def _revise_itinerary(trip: dict, feedback: str) -> dict:
         if requested_days and not planned_days <= requested_days:
             raise ValueError("Revision changes days outside the request")
 
-        travelers = request.get("travelers", {})
-        people = max(1, sum(travelers.get(key, 0) for key in ("adults", "children", "elderly")))
+        people = traveler_count(request)
         delta = 0.0
         for change in changes:
             current = by_day[change.day]
             revised = _merge_day_change(current, change, request.get("pace", "moderate"))
-            delta += _day_cost(revised, people) - _day_cost(current, people)
+            delta += estimate_day_cost(revised, people) - estimate_day_cost(current, people)
             by_day[change.day] = revised
 
         day_plans = list(by_day.values())
@@ -159,14 +159,6 @@ def _merge_day_change(day: dict, change: DayChange, pace: str) -> dict:
     return revised
 
 
-def _day_cost(day: dict, people: int) -> float:
-    tickets = sum(a.get("ticket_price_cny", 0) for a in day.get("attractions") or [])
-    meals = sum((day.get(meal) or {}).get("avg_price_per_person_cny", 0) for meal in ("lunch", "dinner"))
-    transport = sum(t.get("price_cny", 0) for t in day.get("transport") or [])
-    hotel = (day.get("hotel") or {}).get("price_per_night_cny", 0)
-    return (tickets + meals + transport) * people + hotel
-
-
 async def persist_draft(
     sessions, user_id: str, thread_id: str, state: dict, interrupts: tuple
 ) -> dict:
@@ -178,6 +170,7 @@ async def persist_draft(
             raise ReviewError(409, "该规划会话已有行程，请打开原行程或新建规划") from exc
         return {
             **approval,
+            "data": trip.itinerary,
             "trip_id": trip.id,
             "thread_id": thread_id,
             "version": trip.version,

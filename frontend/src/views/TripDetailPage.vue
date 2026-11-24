@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useTravelStore } from '../stores/travel'
 import { decideTrip, getTrip } from '../api/travel'
 import MiniMap from '../components/MiniMap.vue'
+import { itineraryBudget } from '../itineraryBudget'
 import type { DayPlan, TripRecord } from '../types/travel'
 
 const route = useRoute()
@@ -91,20 +92,16 @@ const categoryTag = (cat: string) => {
 
 const budgetItems = computed(() => {
   if (!dayPlans.value.length) return []
-  let tickets = 0, hotels = 0, meals = 0
-  dayPlans.value.forEach(dp => {
-    dp.attractions?.forEach(a => { tickets += a.ticket_price_cny || 0 })
-    if (dp.hotel) hotels += dp.hotel.price_per_night_cny || 0
-    if (dp.lunch) meals += dp.lunch.avg_price_per_person_cny || 0
-    if (dp.dinner) meals += dp.dinner.avg_price_per_person_cny || 0
-  })
-  const total = itinerary.value?.total_budget_estimate_cny ?? tickets + hotels + meals
-  return [
-    { label: '景点门票', value: tickets },
-    { label: '住宿', value: hotels },
-    { label: '餐饮', value: meals },
-    { label: '其他（交通/购物）', value: Math.max(0, total - tickets - hotels - meals) },
+  const budget = itineraryBudget(dayPlans.value, trip.value?.travel_request)
+  const other = (itinerary.value?.total_budget_estimate_cny ?? budget.total) - budget.total
+  const items = [
+    { label: '景点门票', value: budget.tickets },
+    { label: '住宿', value: budget.hotels },
+    { label: '餐饮', value: budget.meals },
+    { label: '交通', value: budget.transport },
   ]
+  if (other > 0.005) items.push({ label: '其他预估费用', value: other })
+  return items
 })
 </script>
 
@@ -270,7 +267,7 @@ const budgetItems = computed(() => {
                     <span>{{ t.from_location }} → {{ t.to_location }}</span>
                     <span>{{ t.type }}</span>
                     <span>{{ t.departure_time }} - {{ t.arrival_time }}</span>
-                    <span>{{ formatPrice(t.price_cny) }}</span>
+                    <span>{{ formatPrice(t.price_cny) }}/人</span>
                   </div>
                 </div>
 

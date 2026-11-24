@@ -121,6 +121,7 @@ export interface TripRecord {
   thread_id: string
   version: number
   status: 'draft' | 'completed'
+  travel_request?: { travelers?: Partial<TravelRequest['travelers']> }
   itinerary: Itinerary
 }
 

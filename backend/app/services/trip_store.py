@@ -1,15 +1,11 @@
 """Trip persistence service — save/load trips from SQLite."""
 
-import logging
 from datetime import datetime
 
-from sqlalchemy import select, desc, update
+from sqlalchemy import desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Trip, TripVersion
-
-logger = logging.getLogger(__name__)
-
 
 class TripThreadConflict(Exception):
     """The thread ID is already assigned to a trip."""
@@ -40,45 +36,68 @@ async def save_trip(
     travel_request = trip_data.get("travel_request", {})
 
     if existing:
-        existing.title = itinerary.get("title", existing.title)
-        existing.destination = itinerary.get("destination", existing.destination)
-        existing.duration_days = itinerary.get("duration_days", existing.duration_days)
-        existing.budget_total = itinerary.get("total_budget_estimate_cny", existing.budget_total)
-        existing.itinerary = itinerary
-        existing.travel_request = travel_request
-        existing.version = itinerary.get("version", existing.version)
-        existing.updated_at = datetime.utcnow()
-        trip = existing
-        logger.info(f"[TripStore] Updated trip {trip.id} (v{trip.version})")
-    else:
-        trip = Trip(
-            thread_id=thread_id,
-            user_id=user_id,
-            title=itinerary.get("title", ""),
-            destination=itinerary.get("destination", ""),
-            duration_days=itinerary.get("duration_days", 0),
-            budget_total=itinerary.get("total_budget_estimate_cny", 0.0),
-            itinerary=itinerary,
-            travel_request=travel_request,
-            version=itinerary.get("version", 1),
-            status=status,
-        )
-        db.add(trip)
-        logger.info(f"[TripStore] Created trip {trip.id}")
+        await _write_revision(db, existing, itinerary, "重新保存行程", travel_request=travel_request)
+        return existing
 
+    itinerary = {**itinerary, "version": 1}
+    trip = Trip(
+        thread_id=thread_id,
+        user_id=user_id,
+        title=itinerary.get("title", ""),
+        destination=itinerary.get("destination", ""),
+        duration_days=itinerary.get("duration_days", 0),
+        budget_total=itinerary.get("total_budget_estimate_cny", 0.0),
+        itinerary=itinerary,
+        travel_request=travel_request,
+        version=1,
+        status=status,
+    )
+    db.add(trip)
     await db.flush()
 
-    # Save version snapshot
-    version = TripVersion(
+    db.add(TripVersion(
         trip_id=trip.id,
-        version=trip.version,
+        version=1,
         itinerary=itinerary,
-        description=f"Version {trip.version}",
-    )
-    db.add(version)
+        description="初次生成",
+    ))
     await db.flush()
 
     return trip
+
+
+async def _next_version(db: AsyncSession, trip_id: str, current: int) -> int:
+    highest = await db.scalar(
+        select(func.max(TripVersion.version)).where(TripVersion.trip_id == trip_id)
+    )
+    return max(current, highest or 0) + 1
+
+
+async def _write_revision(
+    db: AsyncSession, trip: Trip, itinerary: dict, description: str, **extra: dict,
+) -> None:
+    current = trip.version or 0
+    version = await _next_version(db, trip.id, current)
+    itinerary = {**itinerary, "version": version}
+    result = await db.execute(
+        update(Trip)
+        .where(Trip.id == trip.id, Trip.version == trip.version)
+        .values(
+            version=version,
+            itinerary=itinerary,
+            title=itinerary.get("title", trip.title),
+            destination=itinerary.get("destination", trip.destination),
+            duration_days=itinerary.get("duration_days", trip.duration_days),
+            budget_total=itinerary.get("total_budget_estimate_cny", trip.budget_total),
+            updated_at=datetime.utcnow(),
+            **extra,
+        )
+    )
+    if result.rowcount != 1:
+        raise TripRevisionConflict
+    db.add(TripVersion(trip_id=trip.id, version=version, itinerary=itinerary, description=description))
+    await db.flush()
+    await db.refresh(trip)
 
 
 async def _find_owned_trip(db: AsyncSession, trip_id: str, user_id: str) -> Trip | None:
@@ -107,7 +126,7 @@ async def apply_draft_decision(
     if itinerary is None:
         values = {"status": "completed", "updated_at": now}
     else:
-        next_version = version + 1
+        next_version = await _next_version(db, trip_id, version)
         itinerary = {**itinerary, "version": next_version}
         values = {
             "version": next_version,
@@ -193,12 +212,7 @@ async def rollback_trip(
     if not ver:
         return None
 
-    # Update trip with version's itinerary
-    trip.itinerary = ver.itinerary
-    trip.version = version
-    trip.updated_at = datetime.utcnow()
-    await db.flush()
-
+    await _write_revision(db, trip, ver.itinerary, f"回滚到版本 {version}")
     return _trip_to_dict(trip)
 
 
@@ -212,26 +226,7 @@ async def update_trip(
     if trip.status == "draft":
         raise TripRevisionConflict
 
-    new_version = (trip.version or 0) + 1
-
-    trip.itinerary = itinerary
-    trip.title = itinerary.get("title", trip.title)
-    trip.duration_days = itinerary.get("duration_days", trip.duration_days)
-    trip.budget_total = itinerary.get("total_budget_estimate_cny", trip.budget_total)
-    trip.version = new_version
-    trip.updated_at = datetime.utcnow()
-    await db.flush()
-
-    version = TripVersion(
-        trip_id=trip.id,
-        version=new_version,
-        itinerary=itinerary,
-        description=f"手动编辑 v{new_version}",
-    )
-    db.add(version)
-    await db.flush()
-
-    logger.info(f"[TripStore] Updated trip {trip.id} to v{new_version}")
+    await _write_revision(db, trip, itinerary, "手动编辑")
     return _trip_to_dict(trip)
 
 
