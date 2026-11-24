@@ -614,6 +614,22 @@ TRANSPORT_SYSTEM_PROMPT = """你是一个交通规划专家。规划城际和城
 只输出JSON。"""
 
 
+def _normalize_transport(plan: object) -> dict[str, list]:
+    """Return both leg lists, including for trips with no scheduled transport."""
+    normalized: dict[str, list] = {"intercity": [], "intraday": []}
+    if not isinstance(plan, dict):
+        logger.warning("Transport plan is not a JSON object (%s)", type(plan).__name__)
+        return normalized
+
+    for key in normalized:
+        value = plan.get(key, [])
+        if isinstance(value, list):
+            normalized[key] = value
+        else:
+            logger.warning("Transport plan field %s is not a list (%s)", key, type(value).__name__)
+    return normalized
+
+
 async def transport_node(state: dict) -> dict:
     """Plan transportation."""
     llm = DeepSeekProvider(model=DeepSeekProvider.CHAT_MODEL)
@@ -636,7 +652,7 @@ async def transport_node(state: dict) -> dict:
         agent_name="transport_agent",
         started_at=datetime.now().isoformat(),
         completed_at=datetime.now().isoformat(),
-        output_summary=f"规划了城际+城内交通",
+        output_summary="已检查城际和城内交通安排",
         llm_calls=1,
         status="done",
     )
@@ -645,6 +661,6 @@ async def transport_node(state: dict) -> dict:
     history.append(execution.model_dump())
 
     return {
-        "transport": data,
+        "transport": _normalize_transport(data),
         "agent_history": history,
     }

@@ -7,6 +7,7 @@ from datetime import datetime
 from app.schemas.travel_state import AgentExecution
 
 logger = logging.getLogger(__name__)
+DEFAULT_MAX_ITERATIONS = 15
 
 SUPERVISOR_PROMPT = """你是一个 Multi-Agent 系统的调度器。根据当前旅行规划的状态，决定下一步应该执行哪些 Agent。
 
@@ -66,7 +67,7 @@ def _build_state_summary(state: dict) -> str:
     needs_replan = state.get("needs_replan", False)
 
     parts = [
-        f"当前迭代: {iteration}/15",
+        f"当前迭代: {iteration}/{state.get('max_iterations', DEFAULT_MAX_ITERATIONS)}",
         f"目的地: {req.get('destination', '未设定')}",
         f"天数: {req.get('days', '未设定')}",
         f"节奏: {req.get('pace', 'moderate')}",
@@ -74,7 +75,7 @@ def _build_state_summary(state: dict) -> str:
         f"路线: {'已完成' if state.get('routes') else '未完成'}",
         f"酒店: {'已完成' if state.get('hotels') else '未完成'}",
         f"餐厅: {'已完成' if state.get('restaurants') else '未完成'}",
-        f"交通: {'已完成' if state.get('transport') else '未完成'}",
+        f"交通: {'已完成' if 'transport' in state else '未完成'}",
     ]
 
     if needs_replan:
@@ -89,18 +90,19 @@ async def supervisor_node(state: dict) -> dict:
     to run next. Falls back to deterministic rules on any LLM failure.
     """
     iteration = state.get("current_iteration", 0) + 1
+    max_iterations = state.get("max_iterations", DEFAULT_MAX_ITERATIONS)
 
     # Safety valve: max iterations
-    if iteration > 15:
-        logger.warning("Supervisor: hit max iterations (15), forcing compiler")
-        return _done(iteration, "itinerary_compiler", "安全阀: 达到最大迭代次数")
+    if iteration > max_iterations:
+        logger.warning("Supervisor: hit max iterations (%s), forcing compiler", max_iterations)
+        return _done(iteration, "itinerary_compiler", "安全阀: 达到最大迭代次数", state=state)
 
     # Replan: reset and re-run from attraction
     if state.get("needs_replan"):
         violations = state.get("constraint_violations", [])
         replan_count = state.get("replan_count", 0)
         logger.info(f"Supervisor: replan #{replan_count} due to {violations}")
-        return _done(iteration, "attraction", f"Replan #{replan_count}",
+        return _done(iteration, "attraction", f"Replan #{replan_count}", state=state,
                      extra_state={
                          "needs_replan": False,
                          "constraint_violations": [],
@@ -113,8 +115,7 @@ async def supervisor_node(state: dict) -> dict:
     has_routes = bool(state.get("routes"))
     has_hotels = bool(state.get("hotels"))
     has_restaurants = bool(state.get("restaurants"))
-    has_transport = bool(state.get("transport", {}).get("intercity") or
-                         state.get("transport", {}).get("intraday"))
+    has_transport = "transport" in state
 
     # ── Fast path: rule-based fallback when next step is unambiguous ──
     # Most iterations have exactly one valid next agent. LLM is overkill.
