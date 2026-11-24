@@ -4,7 +4,7 @@ import logging
 from difflib import SequenceMatcher
 from typing import Any
 
-from app.services.amap import search_poi
+from app.services.amap import AMAP_MAX_OFFSET, search_poi
 from app.services.chroma_store import get_chroma_store
 
 logger = logging.getLogger(__name__)
@@ -17,10 +17,10 @@ _reranker_available = True
 def _get_reranker():
     """Lazy-load the cross-encoder reranker singleton."""
     global _reranker, _reranker_available
-    if _reranker is not None:
-        return _reranker
     if not _reranker_available:
         return None
+    if _reranker is not None:
+        return _reranker
     try:
         from app.services.embeddings import get_reranker
         _reranker = get_reranker()
@@ -28,6 +28,7 @@ def _get_reranker():
     except Exception as e:
         logger.warning(f"Reranker unavailable (will skip): {e}")
         _reranker_available = False
+        _reranker = None
         return None
 
 
@@ -56,6 +57,7 @@ def _poi_to_text(item: dict) -> str:
 
 def _rerank(query: str, items: list[dict], top_k: int | None = None) -> list[dict]:
     """Re-rank items using cross-encoder. Falls back to original order."""
+    global _reranker, _reranker_available
     if len(items) <= 1:
         return items
 
@@ -70,6 +72,7 @@ def _rerank(query: str, items: list[dict], top_k: int | None = None) -> list[dic
     except Exception as e:
         logger.warning(f"Rerank failed (falling back to original order): {e}")
         _reranker_available = False
+        _reranker = None
         return items[:top_k] if top_k else items
 
 
@@ -103,6 +106,23 @@ def _merge_and_dedup(
     return merged
 
 
+async def _search_amap_items(
+    keywords: str, city: str, poi_type: str, offset: int,
+) -> list[dict[str, Any]]:
+    result = await search_poi(keywords=keywords, city=city, poi_type=poi_type, offset=offset)
+    if result.reason is not None:
+        logger.warning(
+            "Amap POI search degraded: city=%s keywords=%s poi_type=%s reason=%s",
+            city, keywords, poi_type, result.reason,
+        )
+    if result.skipped:
+        logger.info(
+            "Amap POI records skipped: city=%s keywords=%s poi_type=%s skipped=%d",
+            city, keywords, poi_type, result.skipped,
+        )
+    return result.items
+
+
 async def search_attractions_hybrid(
     city: str,
     preferences: list[str] | None = None,
@@ -126,12 +146,17 @@ async def search_attractions_hybrid(
     if chroma_only:
         return chroma_results
 
-    # Amap realtime data
-    amap_results = await search_poi(
+    amap_offset = min(limit, AMAP_MAX_OFFSET)
+    if amap_offset < limit:
+        logger.info(
+            "Amap attraction offset capped: city=%s requested=%d actual=%d",
+            city, limit, amap_offset,
+        )
+    amap_results = await _search_amap_items(
         keywords=city + "景点",
         city=city,
         poi_type="attraction",
-        offset=limit,
+        offset=amap_offset,
     )
 
     merged = _merge_and_dedup(chroma_results, amap_results, prefer_chroma=True)
@@ -156,7 +181,7 @@ async def search_hotels_hybrid(
     except Exception as e:
         logger.warning(f"ChromaDB hotel search failed: {e}")
 
-    amap_results = await search_poi(
+    amap_results = await _search_amap_items(
         keywords=city + "酒店",
         city=city,
         poi_type="hotel",
@@ -193,7 +218,7 @@ async def search_restaurants_hybrid(
     except Exception as e:
         logger.warning(f"ChromaDB restaurant search failed: {e}")
 
-    amap_results = await search_poi(
+    amap_results = await _search_amap_items(
         keywords=city + "美食",
         city=city,
         poi_type="restaurant",
