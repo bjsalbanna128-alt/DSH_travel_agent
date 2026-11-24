@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTravelStore } from '../stores/travel'
 import ProgressCard from '../components/ProgressCard.vue'
@@ -14,11 +14,10 @@ const phaseDisplay = computed(() => {
   return store.progress.current_phase || '规划中...'
 })
 
-const feedbackInput = ref('')
-const showFeedbackDialog = ref(false)
-
 function goHome() {
+  store.cancelPlanning()
   store.reset()
+  store.resetClarify()
   router.push('/')
 }
 
@@ -28,20 +27,6 @@ function goToDetail() {
   }
 }
 
-function handleApprove() {
-  store.approve()
-  goToDetail()
-}
-
-function handleReject() {
-  showFeedbackDialog.value = true
-}
-
-function submitFeedback() {
-  showFeedbackDialog.value = false
-  store.reject(feedbackInput.value)
-  feedbackInput.value = ''
-}
 </script>
 
 <template>
@@ -53,11 +38,11 @@ function submitFeedback() {
         <span class="query-label">{{ store.userQuery }}</span>
       </div>
       <el-button
-        v-if="store.currentTripId && !store.isStreaming && !store.pendingApproval"
+        v-if="store.currentTripId && !store.isStreaming"
         type="primary"
         @click="goToDetail"
       >
-        查看行程详情 →
+        {{ store.pendingApproval ? '查看待确认草稿' : '查看行程详情' }} →
       </el-button>
     </div>
 
@@ -73,8 +58,9 @@ function submitFeedback() {
         />
 
         <!-- Complete state -->
-        <div v-if="!store.isStreaming && store.itinerary && !store.pendingApproval" class="done-card">
-          <el-result icon="success" title="行程规划完成" sub-title="行程已保存，可以查看详情或继续调整">
+        <div v-if="!store.isStreaming && store.currentTripId" class="done-card">
+          <el-result :icon="store.pendingApproval ? 'info' : 'success'"
+            :title="store.pendingApproval ? '草稿已生成，待确认' : '行程已确认'">
             <template #extra>
               <el-button type="primary" @click="goToDetail">查看详情</el-button>
               <el-button @click="goHome">规划新行程</el-button>
@@ -132,41 +118,7 @@ function submitFeedback() {
       </el-col>
     </el-row>
 
-    <!-- Approval banner at bottom -->
-    <div v-if="store.pendingApproval" class="approval-banner">
-      <div class="approval-inner">
-        <div class="approval-text">
-          <el-icon :size="22" color="#e6a23c">
-            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/><line x1="12" y1="8" x2="12" y2="12" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="16" r="1" fill="currentColor"/></svg>
-          </el-icon>
-          <span>{{ store.pendingApproval.question }}</span>
-        </div>
-        <div class="approval-actions">
-          <el-button type="primary" size="large" @click="handleApprove">
-            {{ store.pendingApproval.options?.[0] || '确认行程' }}
-          </el-button>
-          <el-button size="large" @click="handleReject">
-            {{ store.pendingApproval.options?.[1] || '需要修改' }}
-          </el-button>
-        </div>
-      </div>
-    </div>
 
-    <!-- Feedback dialog -->
-    <el-dialog v-model="showFeedbackDialog" title="请描述您想如何修改" width="420px">
-      <el-input
-        v-model="feedbackInput"
-        type="textarea"
-        :rows="3"
-        placeholder="例如：第三天太满了、想换便宜点的酒店、多加点美食..."
-      />
-      <template #footer>
-        <el-button @click="showFeedbackDialog = false">取消</el-button>
-        <el-button type="primary" :disabled="!feedbackInput.trim()" @click="submitFeedback">
-          提交修改意见
-        </el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -219,19 +171,4 @@ function submitFeedback() {
 .tips-card p { font-size: 13px; color: #606266; line-height: 1.6; margin: 0; }
 
 /* Approval banner */
-.approval-banner {
-  position: fixed; bottom: 0; left: 0; right: 0;
-  background: #fff; border-top: 2px solid #e6a23c;
-  box-shadow: 0 -4px 16px rgba(0,0,0,.08); z-index: 100;
-  padding: 16px 24px;
-}
-.approval-inner {
-  max-width: 1200px; margin: 0 auto;
-  display: flex; justify-content: space-between; align-items: center;
-}
-.approval-text {
-  display: flex; align-items: center; gap: 10px;
-  font-size: 15px; font-weight: 500; color: #303133;
-}
-.approval-actions { display: flex; gap: 10px; }
 </style>

@@ -1,20 +1,19 @@
 """SSE streaming endpoint for real-time agent progress."""
 
-import asyncio
 import json
 import logging
 import uuid
 from datetime import datetime, time as dt_time
-from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from app.api.deps import CurrentUserId
 from app.db.database import async_session
-from app.services.trip_store import TripThreadConflict, save_trip
-from langgraph.types import Command
-from pydantic import BaseModel
+from app.services.planning_review import (
+    DraftDecision, ReviewError, persist_draft, remember_confirmed_trip, review_draft,
+)
+from pydantic import BaseModel, Field
 
 from app.graph.travel_graph import AGENT_DISPLAY_NAMES, planning_config, travel_graph
 
@@ -82,7 +81,6 @@ async def stream_travel_planning(request: Request, user_id: CurrentUserId):
     async def event_generator():
         config = planning_config(user_id, thread_id)
         last_node = None
-        final_state: dict = {}
 
         # ── Load memory context ──────────────────────────────────
         try:
@@ -127,31 +125,22 @@ async def stream_travel_planning(request: Request, user_id: CurrentUserId):
                     if node_name == "__end__":
                         continue
 
-                    # Handle LangGraph interrupt (HITL pause)
                     if node_name == "__interrupt__":
-                        interrupt_data = node_output
-                        if isinstance(interrupt_data, (dict, list)):
-                            yield _sse("approval_required", interrupt_data if isinstance(interrupt_data, dict) else {"data": interrupt_data})
-                        continue
+                        snapshot = await travel_graph.aget_state(config)
+                        draft = await persist_draft(
+                            async_session, user_id, thread_id, snapshot.values, node_output
+                        )
+                        yield _sse("approval_required", draft)
+                        return
 
                     node_key = node_name
                     display = AGENT_DISPLAY_NAMES.get(node_key, node_name)
-
-                    # Collect state from node outputs
-                    if isinstance(node_output, dict):
-                        final_state.update(node_output)
-
                     if node_name != last_node:
                         yield _sse("agent_start", {
                             "agent": node_key,
                             "display": display,
                             "progress": _estimate_progress(node_key),
                         })
-
-                    # Check for approval in node output
-                    if isinstance(node_output, dict) and node_output.get("pending_approval"):
-                        yield _sse("approval_required", node_output["pending_approval"])
-
                     yield _sse("agent_done", {
                         "agent": node_key,
                         "display": display,
@@ -159,69 +148,11 @@ async def stream_travel_planning(request: Request, user_id: CurrentUserId):
                         "progress": _estimate_progress(node_key, done=True),
                         "data": node_output if isinstance(node_output, dict) else {},
                     })
-
                     last_node = node_name
 
-            # Capture keys from initial_state that nodes don't return
-            if not final_state.get("travel_request"):
-                final_state["travel_request"] = initial_state.get("travel_request", {})
-
-            # Save trip to database
-            trip_id = None
-            itinerary = final_state.get("itinerary") or {}
-            if itinerary:
-                try:
-                    async with async_session() as db:
-                        trip = await save_trip(
-                            db=db,
-                            thread_id=thread_id,
-                            trip_data={
-                                "itinerary": itinerary,
-                                "travel_request": final_state.get("travel_request", {}),
-                            },
-                            user_id=user_id,
-                        )
-                        await db.commit()
-                        trip_id = trip.id
-                        logger.info(f"[SSE] Trip saved: {trip_id}")
-                except TripThreadConflict:
-                    yield _sse("error", {"message": "该规划会话标识已被使用，请创建新规划"})
-                    return
-                except Exception as e:
-                    logger.error(f"[SSE] Failed to save trip: {e}")
-
-            yield _sse("done", {
-                "message": "行程规划完成",
-                "thread_id": thread_id,
-                "trip_id": trip_id,
-            })
-
-            # ── Save memory after completion ───────────────────
-            try:
-                from app.services.user_profile_store import update_from_trip
-                travel_req = final_state.get("travel_request", {})
-                itinerary_data = final_state.get("itinerary", {})
-                await update_from_trip(
-                    user_id=user_id,
-                    travel_request=travel_req,
-                    itinerary=itinerary_data,
-                )
-
-                # Save episodic memory
-                if itinerary_data and trip_id:
-                    from app.services.chroma_store import get_chroma_store
-                    store = get_chroma_store()
-                    store.add_trip_episode(
-                        trip_id=trip_id,
-                        user_id=user_id,
-                        destination=travel_req.get("destination", ""),
-                        duration_days=itinerary_data.get("duration_days", 0),
-                        total_budget=itinerary_data.get("total_budget_estimate_cny", 0),
-                        summary=itinerary_data.get("title", ""),
-                    )
-                    logger.info(f"[SSE] Memory saved for {user_id}: profile + episode {trip_id}")
-            except Exception as e:
-                logger.warning(f"[SSE] Memory save failed (non-critical): {e}")
+            yield _sse("error", {"message": "规划没有生成可确认的行程"})
+        except ReviewError as exc:
+            yield _sse("error", {"message": str(exc)})
 
         except Exception as e:
             logger.exception(f"Stream error: {e}")
@@ -238,73 +169,30 @@ async def stream_travel_planning(request: Request, user_id: CurrentUserId):
     )
 
 
+class DraftResume(DraftDecision):
+    thread_id: str = Field(min_length=1, max_length=100)
+
+
 @router.post("/v1/trips/resume")
-async def resume_travel_planning(request: Request, user_id: CurrentUserId):
-    """Resume a paused graph after user approval/feedback."""
-    body = await request.json()
-    thread_id = body.get("thread_id", "")
-    action = body.get("action", "approve")  # approve | adjust | reject | lower_budget | partial_edit
-    feedback = body.get("feedback", "")
-    edits = body.get("edits", None)
+async def resume_travel_planning(body: DraftResume, user_id: CurrentUserId, background: BackgroundTasks):
+    """Accept the reviewed draft decision, even after the graph process restarts."""
+    try:
+        trip, newly_confirmed = await review_draft(async_session, user_id, body, thread_id=body.thread_id)
+    except ReviewError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
-    if not thread_id:
-        return StreamingResponse(
-            iter([_sse("error", {"message": "thread_id is required"})]),
-            media_type="text/event-stream",
-        )
-
-    if not isinstance(thread_id, str) or len(thread_id) > 100:
-        raise HTTPException(status_code=422, detail="无效的规划会话标识")
-
-    config = planning_config(user_id, thread_id)
-    snapshot = await travel_graph.aget_state(config)
-    if snapshot.values.get("user_id") != user_id:
-        raise HTTPException(status_code=404, detail="规划会话不存在")
-
-    user_decision: dict[str, Any] = {"action": action, "feedback": feedback}
-    if edits:
-        user_decision["edits"] = edits
-
-    async def event_generator():
-        try:
-            async for event in travel_graph.astream(Command(resume=user_decision), config):
-                for node_name, node_output in event.items():
-                    if node_name == "__end__":
-                        continue
-
-                    if node_name == "__interrupt__":
-                        yield _sse("approval_required", node_output if isinstance(node_output, dict) else {"data": node_output})
-                        continue
-
-                    node_key = node_name
-                    display = AGENT_DISPLAY_NAMES.get(node_key, node_name)
-                    yield _sse("agent_start", {
-                        "agent": node_key,
-                        "display": display,
-                        "progress": _estimate_progress(node_key),
-                    })
-                    yield _sse("agent_done", {
-                        "agent": node_key,
-                        "display": display,
-                        "summary": _summarize(node_key, node_output),
-                        "progress": _estimate_progress(node_key, done=True),
-                        "data": node_output if isinstance(node_output, dict) else {},
-                    })
-
-            yield _sse("done", {"message": "行程规划完成", "thread_id": thread_id})
-
-        except Exception as e:
-            logger.exception(f"Resume stream error: {e}")
-            yield _sse("error", {"message": str(e)[:500]})
-
+    event = "done" if trip["status"] == "completed" else "approval_required"
+    if newly_confirmed:
+        background.add_task(remember_confirmed_trip, user_id, trip)
     return StreamingResponse(
-        event_generator(),
+        iter([_sse(event, {
+            "trip_id": trip["id"],
+            "thread_id": trip["thread_id"],
+            "version": trip["version"],
+            "status": trip["status"],
+            "data": trip["itinerary"],
+        })]),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
     )
 
 

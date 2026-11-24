@@ -64,7 +64,6 @@ def _build_state_summary(state: dict) -> str:
     iteration = state.get("current_iteration", 0)
     violations = state.get("constraint_violations", [])
     needs_replan = state.get("needs_replan", False)
-    has_feedback = bool(state.get("user_feedback"))
 
     parts = [
         f"当前迭代: {iteration}/15",
@@ -80,11 +79,6 @@ def _build_state_summary(state: dict) -> str:
 
     if needs_replan:
         parts.append(f"约束校验失败: {'; '.join(violations)}")
-    if has_feedback:
-        parts.append(f"用户反馈: {state.get('user_feedback', '')[:200]}")
-    if state.get("user_partial_edits"):
-        parts.append("用户进行了局部编辑")
-
     return "\n".join(parts)
 
 
@@ -100,10 +94,6 @@ async def supervisor_node(state: dict) -> dict:
     if iteration > 15:
         logger.warning("Supervisor: hit max iterations (15), forcing compiler")
         return _done(iteration, "itinerary_compiler", "安全阀: 达到最大迭代次数")
-
-    # Local edits: skip directly to compiler
-    if state.get("user_partial_edits"):
-        return _done(iteration, "itinerary_compiler", "局部编辑模式: 跳过所有 Agent 直接编译")
 
     # Replan: reset and re-run from attraction
     if state.get("needs_replan"):

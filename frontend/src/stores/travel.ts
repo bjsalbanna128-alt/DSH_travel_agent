@@ -94,7 +94,8 @@ export const useTravelStore = defineStore('travel', () => {
 
     const query = clarifyMessages.value[0]?.content || ''
     userQuery.value = query
-    threadId.value = clarifyThreadId.value
+    threadId.value = crypto.randomUUID()
+    currentTripId.value = null
     pendingApproval.value = null
     errors.value = []
 
@@ -113,7 +114,7 @@ export const useTravelStore = defineStore('travel', () => {
     const ctrl = streamTravelPlanningWithPrefill(
       query,
       clarifyTravelRequest.value,
-      clarifyThreadId.value ?? undefined,
+      threadId.value,
     )
 
     abortController.value = ctrl
@@ -201,10 +202,7 @@ export const useTravelStore = defineStore('travel', () => {
         break
       }
       case 'approval_required':
-        pendingApproval.value = data
-        itinerary.value = data.data
-        dayPlans.value = data.data.day_plans || []
-        addMessage('agent', `行程已生成！${data.question}`)
+        receiveDraft(data)
         break
       case 'done':
         progress.value.is_streaming = false
@@ -290,10 +288,7 @@ export const useTravelStore = defineStore('travel', () => {
       },
 
       onApprovalRequired(approval) {
-        pendingApproval.value = approval
-        itinerary.value = approval.data
-        dayPlans.value = approval.data.day_plans || []
-        addMessage('agent', `行程已生成！${approval.question}`)
+        receiveDraft(approval)
       },
 
       onDone(tid, tripId) {
@@ -308,7 +303,7 @@ export const useTravelStore = defineStore('travel', () => {
         errors.value.push(msg)
         addMessage('system', `出错：${msg}`)
       },
-    }, threadId.value ?? undefined)
+    }, crypto.randomUUID())
 
     abortController.value = ctrl
   }
@@ -318,21 +313,13 @@ export const useTravelStore = defineStore('travel', () => {
     progress.value.is_streaming = false
   }
 
-  async function approve() {
-    if (!threadId.value) return
-    pendingApproval.value = null
+  function receiveDraft(approval: ApprovalRequest) {
+    pendingApproval.value = approval
+    threadId.value = approval.thread_id
+    currentTripId.value = approval.trip_id
+    itinerary.value = approval.data
+    dayPlans.value = approval.data.day_plans || []
     progress.value.is_streaming = false
-    addMessage('system', '行程已确认')
-  }
-
-  async function reject(feedback: string) {
-    if (!threadId.value) return
-    pendingApproval.value = null
-    progress.value.is_streaming = false
-    addMessage('user', feedback || '需要修改')
-    // Re-run planning with feedback appended
-    const query = userQuery.value + '。补充要求：' + (feedback || '请重新规划')
-    startPlanning(query)
   }
 
   async function rollback(version: number) {
@@ -364,6 +351,6 @@ export const useTravelStore = defineStore('travel', () => {
     isStreaming, totalDays,
     clarifyMessages, clarifyTravelRequest, clarifyThreadId, isClarifying, isReady,
     sendClarifyMessage, startPlanningWithClarifiedRequest, continueClarify,
-    startPlanning, cancelPlanning, approve, reject, rollback, reset, resetClarify, addMessage,
+    startPlanning, cancelPlanning, rollback, reset, resetClarify, addMessage,
   }
 })

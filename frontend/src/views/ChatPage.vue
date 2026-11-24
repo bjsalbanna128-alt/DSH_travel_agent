@@ -131,7 +131,7 @@ function handleMessage(data: any) {
         id: `approval-${Date.now()}`,
         role: 'system',
         type: 'approval',
-        content: '行程已生成，是否确认？',
+        content: '草稿已生成，待确认',
         data: data.data,
         timestamp: Date.now(),
       })
@@ -227,22 +227,6 @@ function send() {
   scrollToBottom()
 }
 
-function handleApprove() {
-  ws.value?.send(JSON.stringify({ type: 'resume', action: 'approve' }))
-  // Remove approval card
-  messages.value = messages.value.filter(m => m.type !== 'approval')
-}
-
-function handleAdjust(feedback: string) {
-  ws.value?.send(JSON.stringify({
-    type: 'resume',
-    action: 'adjust',
-    feedback,
-  }))
-  messages.value = messages.value.filter(m => m.type !== 'approval')
-  streaming.value = true
-}
-
 function goToTrip(id: string) {
   router.push(`/trip/${id}`)
 }
@@ -331,14 +315,10 @@ onUnmounted(() => {
               </svg>
             </div>
             <div class="approval-body">
-              <p class="approval-question">{{ msg.data?.question || msg.content }}</p>
-              <div v-if="msg.data?.options" class="approval-options">
-                <span v-for="opt in msg.data.options" :key="opt" class="approval-opt-tag">{{ opt }}</span>
-              </div>
-            </div>
-            <div class="approval-actions">
-              <el-button type="primary" size="small" @click="handleApprove">确认行程</el-button>
-              <el-button size="small" @click="handleAdjust('请调整行程')">需要修改</el-button>
+              <p class="approval-question">{{ msg.content }}</p>
+              <el-button type="primary" size="small" @click="goToTrip(msg.data.trip_id)">
+                查看待确认草稿
+              </el-button>
             </div>
           </div>
         </div>

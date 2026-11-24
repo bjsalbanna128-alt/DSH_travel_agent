@@ -60,6 +60,9 @@ function formatDate(iso: string) {
           <h3>{{ trip.title || '未命名行程' }}</h3>
           <div class="card-meta">
             <el-tag size="small">{{ trip.destination }}</el-tag>
+            <el-tag size="small" :type="trip.status === 'draft' ? 'warning' : 'success'">
+              {{ trip.status === 'draft' ? '待确认' : '已确认' }}
+            </el-tag>
             <span>{{ trip.duration_days }} 天</span>
             <span v-if="trip.budget_total">¥{{ trip.budget_total.toLocaleString() }}</span>
             <span class="card-date">{{ formatDate(trip.created_at) }}</span>

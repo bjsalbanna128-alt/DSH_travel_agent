@@ -12,7 +12,7 @@ from app.graph.nodes.agents import (
 )
 from app.graph.nodes.compiler import (
     itinerary_compiler_node, constraint_validator_node,
-    human_approval_node, handle_feedback_node,
+    human_approval_node,
 )
 
 AGENT_DISPLAY_NAMES = {
@@ -26,7 +26,6 @@ AGENT_DISPLAY_NAMES = {
     "itinerary_compiler_node": "生成行程",
     "constraint_validator_node": "校验约束",
     "human_approval_node": "等待确认",
-    "handle_feedback_node": "处理反馈",
 }
 
 
@@ -52,22 +51,8 @@ def _route_from_supervisor(state: TravelState) -> str:
 def _route_from_validator(state: TravelState) -> str:
     """Route from validator: replan → supervisor, pass → human_approval."""
     if state.get("needs_replan", False):
-        # Add violation context to user_feedback for replan
-        violations = state.get("constraint_violations", [])
         return "supervisor"
     return "human_approval_node"
-
-
-def _route_from_approval(state: TravelState) -> str:
-    """Route from human_approval: feedback → handle_feedback, else → END."""
-    pending = state.get("pending_approval")
-    if pending is None:
-        return END
-    feedback = state.get("user_feedback", "")
-    if feedback:
-        return "handle_feedback_node"
-    # Check if approval was granted (frontend resumes with empty feedback = approved)
-    return END
 
 
 def build_travel_graph(checkpointer=None):
@@ -85,7 +70,6 @@ def build_travel_graph(checkpointer=None):
     builder.add_node("itinerary_compiler_node", itinerary_compiler_node)
     builder.add_node("constraint_validator_node", constraint_validator_node)
     builder.add_node("human_approval_node", human_approval_node)
-    builder.add_node("handle_feedback_node", handle_feedback_node)
 
     # Entry
     builder.set_entry_point("parse_request")
@@ -121,15 +105,7 @@ def build_travel_graph(checkpointer=None):
         {"supervisor": "supervisor", "human_approval_node": "human_approval_node"},
     )
 
-    # Approval conditional
-    builder.add_conditional_edges(
-        "human_approval_node",
-        _route_from_approval,
-        {"handle_feedback_node": "handle_feedback_node", END: END},
-    )
-
-    # Feedback → supervisor
-    builder.add_edge("handle_feedback_node", "supervisor")
+    builder.add_edge("human_approval_node", END)
 
     # Compile with checkpointer (MemorySaver — trip data persisted via SQLAlchemy)
     if checkpointer is None:

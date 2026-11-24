@@ -5,16 +5,18 @@ import json
 import logging
 import uuid
 from datetime import datetime, time as dt_time
-from typing import Any
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from langchain_core.messages import HumanMessage
-from langgraph.types import Command
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from app.api.deps import authenticate_user
+from app.db.database import async_session
 from app.graph.travel_graph import AGENT_DISPLAY_NAMES, planning_config, travel_graph
 from app.graph.nodes.clarify import clarify_node
+from app.services.planning_review import (
+    DraftDecision, ReviewError, persist_draft, remember_confirmed_trip, review_draft,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["websocket"])
@@ -116,10 +118,10 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
             except Exception:
                 break
 
-    async def run_graph(state_or_command, config: dict):
+    async def run_graph(state, config: dict):
         """Run the graph and push events into the queue. Stops on interrupt or completion."""
         try:
-            async for event in travel_graph.astream(state_or_command, config):
+            async for event in travel_graph.astream(state, config):
                 if _cancel_flag:
                     break
 
@@ -128,14 +130,12 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
                         continue
 
                     if node_name == "__interrupt__":
-                        interrupt_data = node_output
-                        if isinstance(interrupt_data, (dict, list)):
-                            await event_queue.put({
-                                "type": "approval_required",
-                                "data": interrupt_data if isinstance(interrupt_data, dict)
-                                        else {"payload": interrupt_data},
-                            })
-                        return  # Pause — wait for resume command
+                        snapshot = await travel_graph.aget_state(config)
+                        draft = await persist_draft(
+                            async_session, user_id, thread_id, snapshot.values, node_output
+                        )
+                        await event_queue.put({"type": "approval_required", "data": draft})
+                        return
 
                     node_key = node_name
                     display = AGENT_DISPLAY_NAMES.get(node_key, node_name)
@@ -156,9 +156,10 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
                         "data": node_output if isinstance(node_output, dict) else {},
                     })
 
-            # Graph completed without interrupt
-            await event_queue.put({"type": "done", "thread_id": thread_id})
-
+            if not _cancel_flag:
+                await event_queue.put({"type": "error", "message": "规划没有生成可确认的行程"})
+        except ReviewError as exc:
+            await event_queue.put({"type": "error", "message": str(exc)})
         except Exception as e:
             logger.exception(f"[WS] Graph error: {e}")
             await event_queue.put({"type": "error", "message": str(e)[:500]})
@@ -181,6 +182,9 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
 
             if msg_type == "start":
                 # Start new planning
+                if graph_task and not graph_task.done():
+                    await event_queue.put({"type": "error", "message": "规划正在生成"})
+                    continue
                 query = msg.get("query", "")
                 prefill = msg.get("travel_request", None)
 
@@ -261,24 +265,25 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
                     await event_queue.put({"type": "error", "message": str(e)[:500]})
 
             elif msg_type == "resume":
-                # Resume paused graph
-                snapshot = await travel_graph.aget_state(config)
-                if snapshot.values.get("user_id") != user_id:
-                    await event_queue.put({"type": "error", "message": "规划会话不存在"})
-                    continue
-
-                action = msg.get("action", "approve")
-                feedback = msg.get("feedback", "")
-                edits = msg.get("edits", None)
-
-                user_decision: dict[str, Any] = {"action": action, "feedback": feedback}
-                if edits:
-                    user_decision["edits"] = edits
-
-                _cancel_flag = False
-                graph_task = asyncio.create_task(
-                    run_graph(Command(resume=user_decision), config)
-                )
+                try:
+                    decision = DraftDecision.model_validate(msg)
+                    trip, newly_confirmed = await review_draft(
+                        async_session, user_id, decision, thread_id=thread_id
+                    )
+                    kind = "done" if trip["status"] == "completed" else "approval_required"
+                    await event_queue.put({
+                        "type": kind, "trip_id": trip["id"], "thread_id": thread_id,
+                        "data": {
+                            "trip_id": trip["id"], "version": trip["version"],
+                            "status": trip["status"], "data": trip["itinerary"],
+                        },
+                    })
+                    if newly_confirmed:
+                        await remember_confirmed_trip(user_id, trip)
+                except ValidationError:
+                    await event_queue.put({"type": "error", "message": "请指定当前版本和审批操作"})
+                except ReviewError as exc:
+                    await event_queue.put({"type": "error", "message": str(exc)})
 
             elif msg_type == "cancel":
                 _cancel_flag = True

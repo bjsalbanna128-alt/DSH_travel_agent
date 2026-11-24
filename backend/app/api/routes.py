@@ -1,6 +1,6 @@
 """REST API routes for trips, versions, history, and profile."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -8,6 +8,7 @@ from app.db.database import get_db, async_session
 from app.db.models import UserProfile
 from app.api.deps import CurrentUserId
 from app.services import trip_store
+from app.services.planning_review import DraftDecision, ReviewError, remember_confirmed_trip, review_draft
 
 router = APIRouter(prefix="/v1", tags=["api"])
 
@@ -32,6 +33,19 @@ async def list_trips(
     return {"trips": trips, "total": len(trips)}
 
 
+@router.post("/trips/{trip_id}/decision")
+async def decide_trip(
+    trip_id: str, body: DraftDecision, user_id: CurrentUserId, background: BackgroundTasks
+):
+    try:
+        trip, newly_confirmed = await review_draft(async_session, user_id, body, trip_id=trip_id)
+    except ReviewError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    if newly_confirmed:
+        background.add_task(remember_confirmed_trip, user_id, trip)
+    return trip
+
+
 @router.get("/trips/{trip_id}/versions")
 async def list_versions(trip_id: str, user_id: CurrentUserId, db: AsyncSession = Depends(get_db)):
     """List itinerary versions for a trip."""
@@ -49,7 +63,10 @@ async def rollback_trip(
     db: AsyncSession = Depends(get_db),
 ):
     """Roll back to a specific itinerary version."""
-    trip = await trip_store.rollback_trip(db, trip_id, version, user_id=user_id)
+    try:
+        trip = await trip_store.rollback_trip(db, trip_id, version, user_id=user_id)
+    except trip_store.TripRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail="请先确认行程") from exc
     if not trip:
         raise HTTPException(status_code=404, detail="Trip or version not found")
     return trip
@@ -63,7 +80,10 @@ async def update_trip(
     itinerary = body.get("itinerary")
     if not itinerary:
         raise HTTPException(status_code=400, detail="itinerary is required")
-    trip = await trip_store.update_trip(db, trip_id, itinerary, user_id=user_id)
+    try:
+        trip = await trip_store.update_trip(db, trip_id, itinerary, user_id=user_id)
+    except trip_store.TripRevisionConflict as exc:
+        raise HTTPException(status_code=409, detail="请先确认行程") from exc
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
     return trip

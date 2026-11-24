@@ -2,9 +2,9 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTravelStore } from '../stores/travel'
-import { getTrip } from '../api/travel'
+import { decideTrip, getTrip } from '../api/travel'
 import MiniMap from '../components/MiniMap.vue'
-import type { DayPlan } from '../types/travel'
+import type { DayPlan, TripRecord } from '../types/travel'
 
 const route = useRoute()
 const router = useRouter()
@@ -13,9 +13,15 @@ const store = useTravelStore()
 const tripId = computed(() => route.params.tripId as string)
 const activeDay = ref(1)
 const loading = ref(false)
+const trip = ref<TripRecord | null>(null)
+const isDraft = computed(() => trip.value?.status === 'draft')
+const feedback = ref('')
+const deciding = ref(false)
+const decisionError = ref('')
+const notice = ref('')
 
-const itinerary = computed(() => store.currentTripId === tripId.value ? store.itinerary : null)
-const dayPlans = computed(() => store.currentTripId === tripId.value ? store.dayPlans : [])
+const itinerary = computed(() => trip.value?.itinerary)
+const dayPlans = computed(() => itinerary.value?.day_plans ?? [])
 
 const currentDay = computed<DayPlan | null>(() =>
   dayPlans.value.find(d => d.day === activeDay.value) ?? null
@@ -26,26 +32,51 @@ const isEmpty = computed(() =>
 )
 
 watch(tripId, async (id, _, onCleanup) => {
-  if (!id || (itinerary.value && dayPlans.value.length > 0)) {
-    loading.value = false
-    return
-  }
+  trip.value = null
+  feedback.value = ''
+  decisionError.value = ''
+  notice.value = ''
+  deciding.value = false
+  activeDay.value = 1
+  if (!id) return
   const controller = new AbortController()
   onCleanup(() => controller.abort())
   loading.value = true
   try {
-    const trip = await getTrip(id, controller.signal)
-    if (!controller.signal.aborted && trip.itinerary) {
-      store.itinerary = trip.itinerary
-      store.dayPlans = trip.itinerary.day_plans || []
-      store.currentTripId = id
-    }
+    const saved = await getTrip(id, controller.signal)
+    if (!controller.signal.aborted) trip.value = saved
   } catch (e: unknown) {
     if (!controller.signal.aborted) console.error('Failed to load trip:', e)
   } finally {
     if (!controller.signal.aborted) loading.value = false
   }
 }, { immediate: true })
+
+async function submitDecision(action: 'approve' | 'adjust') {
+  if (!trip.value || deciding.value) return
+  const id = trip.value.id
+  deciding.value = true
+  decisionError.value = ''
+  notice.value = ''
+  try {
+    const saved = await decideTrip(id, action, trip.value.version, feedback.value.trim())
+    if (tripId.value !== id) return
+    trip.value = saved
+    if (store.currentTripId === id) {
+      store.itinerary = saved.itinerary
+      store.dayPlans = saved.itinerary.day_plans
+      if (saved.status === 'completed') store.pendingApproval = null
+    }
+    feedback.value = ''
+    notice.value = action === 'adjust' ? '已更新草稿，请查看后确认。' : '行程已确认。'
+  } catch (error) {
+    if (tripId.value === id) {
+      decisionError.value = error instanceof Error ? error.message : '提交失败，请重试'
+    }
+  } finally {
+    if (tripId.value === id) deciding.value = false
+  }
+}
 
 function formatPrice(v: number): string {
   return v > 0 ? `¥${v.toLocaleString()}` : '—'
@@ -100,6 +131,7 @@ const budgetItems = computed(() => {
           <h1>{{ itinerary?.title || '行程详情' }}</h1>
           <div class="header-meta">
             <el-tag type="primary">{{ itinerary?.destination }}</el-tag>
+            <el-tag :type="isDraft ? 'warning' : 'success'">{{ isDraft ? '待确认' : '已确认' }}</el-tag>
             <span>{{ itinerary?.duration_days }} 天</span>
             <span v-if="itinerary?.version">版本 {{ itinerary?.version }}</span>
             <span>{{ itinerary?.created_at?.slice(0, 10) }}</span>
@@ -108,11 +140,34 @@ const budgetItems = computed(() => {
         <div class="header-budget">
           <div class="budget-amount">{{ formatPrice(itinerary?.total_budget_estimate_cny ?? 0) }}</div>
           <div class="budget-sub">预估总费用</div>
-          <el-button type="primary" plain size="small" style="margin-top:8px" @click="router.push(`/trip/${tripId}/edit`)">
+          <el-button v-if="!isDraft" type="primary" plain size="small" style="margin-top:8px" @click="router.push(`/trip/${tripId}/edit`)">
             编辑行程
           </el-button>
         </div>
       </div>
+
+      <el-alert v-if="notice" :title="notice" type="success" :closable="false" class="review-panel" />
+      <el-card v-if="isDraft" class="review-panel" shadow="never">
+        <el-input
+          v-model="feedback"
+          aria-label="AI 调整意见"
+          type="textarea"
+          :rows="2"
+          maxlength="2000"
+          :disabled="deciding"
+          placeholder="例如：第三天太满了，删掉杜甫草堂"
+        />
+        <el-alert v-if="decisionError" :title="decisionError" type="error" :closable="false" />
+        <div class="review-actions">
+          <el-button :disabled="deciding || !feedback.trim()" @click="submitDecision('adjust')">
+            提交 AI 调整
+          </el-button>
+          <el-button type="primary" :disabled="deciding" @click="submitDecision('approve')">
+            确认行程
+          </el-button>
+          <span v-if="deciding" role="status">正在处理…</span>
+        </div>
+      </el-card>
 
       <el-row :gutter="24">
         <!-- Main content -->
@@ -259,6 +314,8 @@ const budgetItems = computed(() => {
 </template>
 
 <style scoped>
+.review-panel { margin-bottom: 20px; }
+.review-actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .trip-detail { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
 
 /* Header */

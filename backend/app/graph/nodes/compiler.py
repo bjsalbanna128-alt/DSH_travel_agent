@@ -1,11 +1,12 @@
-"""Itinerary compiler, constraint validator, human approval, and feedback handler."""
+"""Itinerary compiler, constraint validator, and the draft review boundary."""
 
 import json
 import logging
-import uuid
 from datetime import datetime
 
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
+from langgraph.types import interrupt
+
 from app.schemas.travel_state import (
     AgentExecution, DayPlan, Itinerary, ApprovalRequest,
 )
@@ -59,9 +60,6 @@ async def itinerary_compiler_node(state: dict) -> dict:
     hotels = state.get("hotels", [])
     restaurants = state.get("restaurants", [])
 
-    # Check for partial edits
-    partial_edits = state.get("user_partial_edits")
-
     ctx = {
         "destination": req.get("destination", ""),
         "days": req.get("days", 0),
@@ -73,11 +71,6 @@ async def itinerary_compiler_node(state: dict) -> dict:
     }
 
     user_prompt = json.dumps(ctx, ensure_ascii=False, indent=2)
-    if partial_edits:
-        user_prompt = (
-            f"## 局部编辑指令\n{json.dumps(partial_edits, ensure_ascii=False)}\n\n"
-            f"## 当前行程（只更新受影响的day）\n{user_prompt}"
-        )
 
     raw = await llm.chat(
         system_prompt=COMPILER_SYSTEM_PROMPT,
@@ -261,7 +254,6 @@ async def human_approval_node(state: dict) -> dict:
     itinerary = state.get("itinerary", {})
 
     approval = ApprovalRequest(
-        approval_id=str(uuid.uuid4()),
         type="itinerary",
         question=(
             f"行程「{itinerary.get('title', '您的旅行')}」已生成 "
@@ -271,64 +263,9 @@ async def human_approval_node(state: dict) -> dict:
         options=[
             "确认行程",
             "调整部分安排",
-            "降低预算",
-            "换一批景点",
         ],
         data=itinerary,
     )
 
-    return {"pending_approval": approval.model_dump()}
-
-
-# ═══════════════════════════════════════════════════════════════
-# Handle Feedback
-# ═══════════════════════════════════════════════════════════════
-
-FEEDBACK_SYSTEM_PROMPT = """解析用户的行程修改意见，输出结构化编辑指令。
-
-## 输出格式
-{
-  "action": "partial_edit|full_replan",
-  "edits": {"day_index": 0, "action": "replace_hotel|remove_attraction|add_attraction|reduce_budget", ...},
-  "feedback_summary": "总结用户意图"
-}
-
-只输出JSON。"""
-
-
-async def handle_feedback_node(state: dict) -> dict:
-    """Process user feedback and convert to actionable edits."""
-    llm = DeepSeekProvider(model=DeepSeekProvider.CHAT_MODEL)
-    feedback = state.get("user_feedback", "")
-
-    if not feedback:
-        return {"next_agents": [], "needs_replan": False}
-
-    raw = await llm.chat(
-        system_prompt=FEEDBACK_SYSTEM_PROMPT,
-        user_prompt=f"用户反馈: {feedback}\n行程概要: {json.dumps(state.get('itinerary', {}), ensure_ascii=False)[:2000]}",
-        temperature=0.3,
-        json_mode=True,
-    )
-
-    data = safe_json_parse(raw, "feedback")
-
-    if data.get("action") == "partial_edit":
-        return {
-            "user_partial_edits": data.get("edits", {}),
-            "user_feedback": "",
-            "next_agents": [],
-        }
-
-    # Full replan
-    return {
-        "user_feedback": "",
-        "needs_replan": True,
-        "next_agents": ["attraction"],
-        "attractions": [],
-        "routes": [],
-        "hotels": [],
-        "restaurants": [],
-        "transport": {},
-        "itinerary": {},
-    }
+    interrupt(approval.model_dump())
+    return {}

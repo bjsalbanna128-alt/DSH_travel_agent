@@ -3,7 +3,7 @@
 import logging
 from datetime import datetime
 
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Trip, TripVersion
@@ -12,7 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 class TripThreadConflict(Exception):
-    """The thread ID is already assigned to another account's trip."""
+    """The thread ID is already assigned to a trip."""
+
+
+class TripRevisionConflict(Exception):
+    """The trip status or version changed before the decision could be saved."""
 
 
 async def save_trip(
@@ -20,6 +24,8 @@ async def save_trip(
     thread_id: str,
     trip_data: dict,
     user_id: str,
+    *,
+    status: str = "completed",
 ) -> Trip:
     """Create or update a trip record."""
     # Check if trip already exists for this thread_id
@@ -27,7 +33,7 @@ async def save_trip(
         select(Trip).where(Trip.thread_id == thread_id)
     )
     existing = result.scalar_one_or_none()
-    if existing is not None and existing.user_id != user_id:
+    if existing is not None and (existing.user_id != user_id or status == "draft"):
         raise TripThreadConflict
 
     itinerary = trip_data.get("itinerary", trip_data)
@@ -55,7 +61,7 @@ async def save_trip(
             itinerary=itinerary,
             travel_request=travel_request,
             version=itinerary.get("version", 1),
-            status="completed",
+            status=status,
         )
         db.add(trip)
         logger.info(f"[TripStore] Created trip {trip.id}")
@@ -86,6 +92,47 @@ async def get_trip(db: AsyncSession, trip_id: str, *, user_id: str) -> dict | No
     if not trip:
         return None
     return _trip_to_dict(trip)
+
+
+async def get_trip_by_thread(db: AsyncSession, thread_id: str, *, user_id: str) -> dict | None:
+    trip = await db.scalar(select(Trip).where(Trip.thread_id == thread_id, Trip.user_id == user_id))
+    return _trip_to_dict(trip) if trip else None
+
+
+async def apply_draft_decision(
+    db: AsyncSession, trip_id: str, user_id: str, version: int, itinerary: dict | None = None
+) -> tuple[dict, bool]:
+    """Atomically confirm the reviewed version or replace it with an adjusted draft."""
+    now = datetime.utcnow()
+    if itinerary is None:
+        values = {"status": "completed", "updated_at": now}
+    else:
+        next_version = version + 1
+        itinerary = {**itinerary, "version": next_version}
+        values = {
+            "version": next_version,
+            "itinerary": itinerary,
+            "budget_total": itinerary["total_budget_estimate_cny"],
+            "updated_at": now,
+        }
+
+    result = await db.execute(
+        update(Trip)
+        .where(Trip.id == trip_id, Trip.user_id == user_id, Trip.status == "draft",
+               Trip.version == version)
+        .values(**values)
+    )
+    updated = result.rowcount == 1
+    trip = await get_trip(db, trip_id, user_id=user_id)
+    if not updated:
+        if itinerary is None and trip and trip["status"] == "completed" and trip["version"] == version:
+            return trip, False
+        raise TripRevisionConflict
+    if itinerary is not None:
+        db.add(TripVersion(
+            trip_id=trip_id, version=next_version, itinerary=itinerary, description="AI 调整"
+        ))
+    return trip, itinerary is None
 
 
 async def list_trips(
@@ -134,6 +181,8 @@ async def rollback_trip(
     trip = await _find_owned_trip(db, trip_id, user_id)
     if trip is None:
         return None
+    if trip.status == "draft":
+        raise TripRevisionConflict
 
     # Find the version
     result = await db.execute(
@@ -160,6 +209,8 @@ async def update_trip(
     trip = await _find_owned_trip(db, trip_id, user_id)
     if not trip:
         return None
+    if trip.status == "draft":
+        raise TripRevisionConflict
 
     new_version = (trip.version or 0) + 1
 

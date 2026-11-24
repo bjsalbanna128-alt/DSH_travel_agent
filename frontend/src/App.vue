@@ -3,7 +3,6 @@ import { watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTravelStore } from './stores/travel'
 import { useAuthStore } from './stores/auth'
-import ApprovalDialog from './components/ApprovalDialog.vue'
 
 const store = useTravelStore()
 const auth = useAuthStore()
@@ -44,12 +43,6 @@ watch(() => auth.token, () => {
       </el-main>
     </el-container>
 
-    <ApprovalDialog
-      v-if="store.pendingApproval"
-      :approval="store.pendingApproval"
-      @approve="store.approve()"
-      @reject="store.reject($event)"
-    />
   </div>
 </template>
 

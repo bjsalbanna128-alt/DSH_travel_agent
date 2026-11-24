@@ -106,11 +106,22 @@ export interface Itinerary {
 }
 
 export interface ApprovalRequest {
+  trip_id: string
+  thread_id: string
+  version: number
   approval_id: string
   type: string
   question: string
   options: string[]
   data: Itinerary
+}
+
+export interface TripRecord {
+  id: string
+  thread_id: string
+  version: number
+  status: 'draft' | 'completed'
+  itinerary: Itinerary
 }
 
 export interface AgentProgress {

@@ -2,7 +2,7 @@
 // Travel API Client — SSE streaming + REST helpers
 // ═══════════════════════════════════════════════════════
 
-import type { SSECallbacks, ApprovalRequest } from '../types/travel'
+import type { SSECallbacks, ApprovalRequest, TripRecord } from '../types/travel'
 import { useAuthStore } from '../stores/auth'
 
 const API_BASE = '/api/v1'
@@ -131,72 +131,25 @@ function _dispatch(event: string, data: any, cb: SSECallbacks): void {
   }
 }
 
-export function streamResumePlanning(
-  threadId: string,
-  action: string,
-  feedback: string,
-  edits: Record<string, any> | null,
-  callbacks: SSECallbacks,
-): AbortController {
-  const controller = new AbortController()
-
-  travelFetch(`${API_BASE}/trips/resume`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      thread_id: threadId,
-      action,
-      feedback: feedback || '',
-      edits: edits || null,
-    }),
-    signal: controller.signal,
-  })
-    .then(async (response) => {
-      if (!response.ok) {
-        callbacks.onError?.(`HTTP ${response.status}: ${response.statusText}`)
-        return
-      }
-
-      const reader = response.body!.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let currentEvent = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7).trim()
-          } else if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              _dispatch(currentEvent, data, callbacks)
-            } catch {
-              // skip malformed JSON
-            }
-          }
-        }
-      }
-    })
-    .catch((err) => {
-      if (err.name !== 'AbortError') {
-        callbacks.onError?.(err.message)
-      }
-    })
-
-  return controller
-}
-
-export async function getTrip(tripId: string, signal?: AbortSignal) {
+export async function getTrip(tripId: string, signal?: AbortSignal): Promise<TripRecord> {
   const res = await travelFetch(`${API_BASE}/trips/${tripId}`, { signal })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json()
+}
+
+export async function decideTrip(
+  tripId: string, action: 'approve' | 'adjust', version: number, feedback?: string,
+): Promise<TripRecord> {
+  const response = await travelFetch(`${API_BASE}/trips/${tripId}/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, version, feedback }),
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}))
+    throw new Error(typeof error.detail === 'string' ? error.detail : `HTTP ${response.status}`)
+  }
+  return response.json()
 }
 
 export async function listTrips(): Promise<any[]> {
