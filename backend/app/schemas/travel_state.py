@@ -29,6 +29,9 @@ class TravelState(TypedDict, total=False):
 
     # ── User request ──
     travel_request: dict[str, Any]
+    # 必须声明：sse.py 在收到预填充 travel_request 时置 True，parse_request 据此跳过 LLM 解析。
+    # 未声明时 LangGraph 会丢弃该键，预填充通道失效。
+    skip_parse: bool
 
     # ── Agent outputs ──
     attractions: list[dict[str, Any]]
