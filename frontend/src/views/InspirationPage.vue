@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { itineraryTemplates } from '../api/itineraryTemplates'
@@ -95,7 +95,7 @@ onMounted(async () => {
 <template>
   <section class="inspiration-page">
     <header class="inspiration-header">
-      <el-button text @click="router.push('/chat')">← 返回聊天</el-button>
+      <el-button text @click="router.push('/')">← 返回聊天</el-button>
       <h1>随机旅行灵感</h1>
       <span class="inspiration-hint">从精选行程模板里挑一个，补充几条信息就能开始规划</span>
     </header>
@@ -109,7 +109,7 @@ onMounted(async () => {
 
     <div v-else-if="!summaries.length" class="inspiration-state">
       <p>暂时还没有上线的行程模板。</p>
-      <el-button @click="router.push('/chat')">回到聊天自己规划</el-button>
+      <el-button @click="router.push('/')">回到聊天自己规划</el-button>
     </div>
 
     <template v-else>
@@ -172,3 +172,4 @@ onMounted(async () => {
 .inspiration-people { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: #606266; }
 .inspiration-error { color: #f56c6c; font-size: 13px; margin: 0 0 8px 96px; }
 </style>
+

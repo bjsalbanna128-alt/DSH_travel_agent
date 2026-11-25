@@ -73,7 +73,6 @@ store.resetClarify()
       <h1>AI 旅行规划师</h1>
       <p>告诉我你想去哪，剩下的交给我</p>
       <div class="header-links">
-        <el-button type="primary" @click="router.push('/chat')">聊天规划 (WebSocket)</el-button>
         <el-button text @click="router.push('/history')">历史行程</el-button>
       </div>
     </div>

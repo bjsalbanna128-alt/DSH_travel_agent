@@ -28,10 +28,9 @@ const router = createRouter({
       component: () => import('../views/PlanPage.vue'),
     },
     {
+      // The standalone chat page was removed; keep the old address working.
       path: '/chat',
-      name: 'chat',
-      meta: { area: 'c' },
-      component: () => import('../views/ChatPage.vue'),
+      redirect: '/',
     },
     {
       path: '/inspiration',
