@@ -14,7 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from app.db.database import reserve_write
-from app.db.models import User, UserRole
+from app.db.models import Trip, TripVersion, User, UserRole
 from app.db.support_models import Message, MessageSetting, NotificationEvent, utc_now
 from app.schemas.admin_resources import ResourcePage
 from app.schemas.support import (
@@ -284,6 +284,49 @@ async def list_messages(
     return ResourcePage[InboxMessage](items=[InboxMessage.model_validate(row, from_attributes=True) for row in rows], total=total)
 
 
+async def _confirmation_summary(db: AsyncSession, event: NotificationEvent) -> ConfirmationSummary:
+    """Describe the confirmed snapshot so the operator sees more than an id."""
+    trip = await db.get(Trip, event.target_id)
+    version = event.target_version
+    snapshot: dict = {}
+    if trip is not None and version is not None:
+        row = await db.scalar(select(TripVersion).where(
+            TripVersion.trip_id == trip.id, TripVersion.version == version,
+        ))
+        snapshot = (row.itinerary if row is not None else None) or {}
+    snapshot = snapshot or (trip.itinerary if trip is not None else None) or {}
+
+    member_id = trip.user_id if trip is not None else ""
+    username = ""
+    if member_id:
+        username = await db.scalar(select(User.username).where(User.id == member_id)) or ""
+
+    budget = snapshot.get("total_budget_estimate_cny")
+    if not isinstance(budget, (int, float)):
+        budget = trip.budget_total if trip is not None else 0
+    days = snapshot.get("duration_days")
+    if not isinstance(days, int):
+        days = trip.duration_days if trip is not None else 0
+    travelers = (trip.travel_request or {}).get("travelers") if trip is not None else None
+
+    return ConfirmationSummary(
+        trip_id=event.target_id,
+        title=snapshot.get("title") or (trip.title if trip is not None else ""),
+        version=version or 0,
+        confirmed_at=event.occurred_at,
+        member_id=member_id,
+        username=username,
+        destination=snapshot.get("destination") or (trip.destination if trip is not None else ""),
+        duration_days=days or 0,
+        total_budget_cny=float(budget or 0),
+        travelers=travelers if isinstance(travelers, dict) else None,
+        current_version=trip.version if trip is not None else None,
+        modified_after_confirm=(
+            trip is not None and version is not None and trip.version != version
+        ),
+    )
+
+
 async def message_detail(db: AsyncSession, account: User, message_id: str) -> InboxMessageDetail:
     row = await db.scalar(select(Message).where(*_inbox_scope(account), Message.id == message_id))
     if row is None:
@@ -291,10 +334,8 @@ async def message_detail(db: AsyncSession, account: User, message_id: str) -> In
     response = InboxMessageDetail.model_validate(row, from_attributes=True)
     if row.target_type == "trip_confirmation":
         event = await db.get(NotificationEvent, row.event_key)
-        response.confirmation = ConfirmationSummary(
-            trip_id=event.target_id, title=event.data["trip_title"],
-            version=event.target_version, confirmed_at=event.occurred_at,
-        )
+        if event is not None:
+            response.confirmation = await _confirmation_summary(db, event)
     return response
 
 

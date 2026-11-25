@@ -22,8 +22,23 @@ export interface InboxMessage {
   read_at: string | null
 }
 
+export interface ConfirmationSummary {
+  trip_id: string
+  title: string
+  version: number
+  confirmed_at: string
+  member_id: string
+  username: string
+  destination: string
+  duration_days: number
+  total_budget_cny: number
+  travelers: { adults?: number; children?: number; elderly?: number } | null
+  current_version: number | null
+  modified_after_confirm: boolean
+}
+
 export interface InboxMessageDetail extends InboxMessage {
-  confirmation: { trip_id: string; title: string; version: number; confirmed_at: string } | null
+  confirmation: ConfirmationSummary | null
 }
 
 export interface MessageSetting {

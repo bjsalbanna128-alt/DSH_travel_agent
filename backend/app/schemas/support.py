@@ -49,6 +49,14 @@ class ConfirmationSummary(BaseModel):
     title: str
     version: int
     confirmed_at: UtcTimestamp
+    member_id: str = ""
+    username: str = ""
+    destination: str = ""
+    duration_days: int = 0
+    total_budget_cny: float = 0.0
+    travelers: dict | None = None
+    current_version: int | None = None
+    modified_after_confirm: bool = False
 
 
 class InboxMessage(BaseModel):
