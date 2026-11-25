@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.admin import router as admin_router
 from app.api.deps import require_operator
 from app.api.itinerary_templates import reader_router as template_reader_router
+from app.api.membership import tourist_router as membership_router
 from app.api.recommendations import reader_router as recommendation_reader_router
 from app.api.routes import router as api_router
 from app.api.sse import router as sse_router
@@ -29,6 +30,7 @@ from app.config import settings
 from app.db import database
 from app.db.database import init_db
 from app.services.notifications import notification_worker
+from app.services.point_expiry import point_expiry_worker
 
 
 @asynccontextmanager
@@ -64,7 +66,7 @@ async def lifespan(app: FastAPI):
     except Exception:
         print("[TravelAgent] Redis unavailable — caching disabled")
 
-    async with notification_worker(database.async_session):
+    async with notification_worker(database.async_session), point_expiry_worker(database.async_session):
         yield
     print("[TravelAgent] Shutting down")
 
@@ -91,6 +93,7 @@ app.include_router(auth_router, prefix="/api")
 app.include_router(template_reader_router, prefix="/api")
 app.include_router(recommendation_reader_router, prefix="/api")
 app.include_router(support_router, prefix="/api")
+app.include_router(membership_router, prefix="/api")
 app.include_router(admin_router, prefix="/api", dependencies=[Depends(require_operator)])
 app.include_router(ws_router)
 

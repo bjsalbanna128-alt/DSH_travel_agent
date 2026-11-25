@@ -41,6 +41,9 @@ function goToTrip(tripId: string) {
       <el-button v-if="auth.isLoggedIn" text type="danger" size="small" @click="auth.logout()">退出登录</el-button>
       <div v-else />
     </div>
+    <div v-if="auth.role === 'tourist'" class="member-center-link">
+      <router-link :to="{ name: 'membership' }" class="el-button el-button--primary is-plain">会员中心</router-link>
+    </div>
 
     <div v-if="!auth.isLoggedIn" style="text-align:center;padding:40px">
       <p style="color:#909399;margin-bottom:16px">登录后可查看个性化偏好和历史行程</p>
@@ -91,6 +94,7 @@ function goToTrip(tripId: string) {
 </template>
 
 <style scoped>
+.member-center-link { margin-bottom: 16px; }
 .profile-page { max-width: 1000px; margin: 0 auto; padding: 20px 16px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
 .page-header h1 { font-size: 22px; margin: 0; }

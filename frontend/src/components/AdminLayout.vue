@@ -82,6 +82,7 @@ onBeforeUnmount(() => request?.abort())
             <div class="admin-nav-label">客服售后</div>
             <router-link class="admin-nav-link" :to="{ name: 'admin-tickets' }">工单</router-link>
           </div>
+          <router-link class="admin-nav-link" :to="{ name: 'admin-members' }">用户会员</router-link>
         </nav>
       </el-aside>
       <el-main class="admin-main">

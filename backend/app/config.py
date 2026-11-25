@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -66,6 +67,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "dev-secret-change-in-production"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440
+    pii_encryption_key: SecretStr = SecretStr("")
 
 
 settings = Settings()

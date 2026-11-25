@@ -55,6 +55,12 @@ const router = createRouter({
       component: () => import('../views/InboxPage.vue'),
     },
     {
+      path: '/membership',
+      name: 'membership',
+      meta: { touristOnly: true },
+      component: () => import('../views/MemberCenterPage.vue'),
+    },
+    {
       path: '/messages/:id',
       name: 'message-detail',
       meta: { touristOnly: true },
@@ -152,6 +158,16 @@ const router = createRouter({
           name: 'admin-ticket-detail',
           component: () => import('../views/TicketDetailPage.vue'),
           props: { operator: true },
+        },
+        {
+          path: 'members',
+          name: 'admin-members',
+          component: () => import('../views/AdminMembersPage.vue'),
+        },
+        {
+          path: 'members/:id',
+          name: 'admin-member-detail',
+          component: () => import('../views/AdminMemberDetailPage.vue'),
         },
       ],
     },
