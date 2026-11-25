@@ -122,6 +122,14 @@ store.resetClarify()
         </div>
       </div>
 
+      <!-- Random template entry, always visible above the input -->
+      <div class="inspiration-entry">
+        <span>没有想法？</span>
+        <el-button text type="primary" size="small" @click="router.push('/inspiration')">
+          试试随机旅行
+        </el-button>
+      </div>
+
       <!-- Input area -->
       <div class="chat-input-area">
         <el-input
@@ -314,6 +322,17 @@ store.resetClarify()
 @keyframes bounce {
   0%, 80%, 100% { transform: scale(0); }
   40% { transform: scale(1); }
+}
+
+/* Random template entry */
+.inspiration-entry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding-top: 10px;
+  font-size: 13px;
+  color: #909399;
 }
 
 /* Input */

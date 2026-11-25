@@ -377,6 +377,12 @@ onUnmounted(() => {
 
     <!-- Input -->
     <div class="chat-input-bar">
+      <div class="inspiration-entry">
+        <span>没有想法？</span>
+        <el-button text type="primary" size="small" @click="router.push('/inspiration')">
+          试试随机旅行
+        </el-button>
+      </div>
       <el-button
         v-if="readyToPlan"
         type="primary"
@@ -524,8 +530,12 @@ onUnmounted(() => {
 }
 
 /* Input bar */
-.chat-input-bar {
-  padding: 12px 16px; background: #fff; border-top: 1px solid #ebeef5;
-  flex-shrink: 0;
+.chat-input-bar { padding: 12px 16px; background: #fff; border-top: 1px solid #ebeef5; flex-shrink: 0; }
+
+/* Random template entry, always visible above the input */
+.inspiration-entry {
+  display: flex; align-items: center; justify-content: center; gap: 2px;
+  font-size: 13px; color: #909399; margin-bottom: 8px;
 }
 </style>
+

@@ -1,7 +1,7 @@
 import { adminQueryString, adminRequest, readApiError } from './adminResources'
 import { travelFetch } from './travel'
 import type { PageResult } from '../types/adminResources'
-import type { PublishedTemplate, TemplateDetail, TemplateDraft, TemplateSummary, TemplateVisibility } from '../types/itineraryTemplates'
+import type { PublishedTemplate, ReaderTemplateSummary, TemplateDetail, TemplateDraft, TemplateSummary, TemplateVisibility } from '../types/itineraryTemplates'
 
 const base = '/itinerary-templates'
 const path = (id: string) => `${base}/${encodeURIComponent(id)}`
@@ -23,6 +23,13 @@ export const itineraryTemplates = {
   unpublish: (id: string, expected_revision: number) => write(`${path(id)}/unpublish`, 'POST', { expected_revision }),
   async getPublished(id: string, signal: AbortSignal): Promise<PublishedTemplate> {
     const response = await travelFetch(`/api/v1${path(id)}`, { signal, cache: 'no-store' })
+    if (!response.ok) throw await readApiError(response)
+    return response.json()
+  },
+  async listPublished(
+    params: { page?: number; page_size?: number }, signal: AbortSignal,
+  ): Promise<PageResult<ReaderTemplateSummary>> {
+    const response = await travelFetch(`/api/v1${base}${adminQueryString(params)}`, { signal, cache: 'no-store' })
     if (!response.ok) throw await readApiError(response)
     return response.json()
   },

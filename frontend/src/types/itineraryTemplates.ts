@@ -78,3 +78,15 @@ export interface PublishedTemplate extends TemplateContent {
   days_count: number
   published_at: string
 }
+
+// Reader list item for the tourist-facing template browser.
+export interface ReaderTemplateSummary {
+  id: string
+  version: number
+  title: string
+  destination: string
+  days_count: number
+  tags: string[]
+  description: string
+  published_at: string
+}

@@ -34,6 +34,12 @@ const router = createRouter({
       component: () => import('../views/ChatPage.vue'),
     },
     {
+      path: '/inspiration',
+      name: 'inspiration',
+      meta: { area: 'c' },
+      component: () => import('../views/InspirationPage.vue'),
+    },
+    {
       path: '/trip/:tripId',
       name: 'trip-detail',
       meta: { area: 'c' },

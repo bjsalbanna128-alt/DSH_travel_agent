@@ -89,10 +89,7 @@ export const useTravelStore = defineStore('travel', () => {
     }
   }
 
-  function startPlanningWithClarifiedRequest() {
-    if (!clarifyTravelRequest.value) return
-
-    const query = clarifyMessages.value[0]?.content || ''
+  function startPlanningWithRequest(query: string, travelRequest: Record<string, any>) {
     userQuery.value = query
     threadId.value = crypto.randomUUID()
     currentTripId.value = null
@@ -111,13 +108,15 @@ export const useTravelStore = defineStore('travel', () => {
     addMessage('user', query)
 
     // Pass pre-filled travel_request to skip parse_request
-    const ctrl = streamTravelPlanningWithPrefill(
-      query,
-      clarifyTravelRequest.value,
-      threadId.value,
-    )
+    abortController.value = streamTravelPlanningWithPrefill(query, travelRequest, threadId.value)
+  }
 
-    abortController.value = ctrl
+  function startPlanningWithClarifiedRequest() {
+    if (!clarifyTravelRequest.value) return
+    startPlanningWithRequest(
+      clarifyMessages.value[0]?.content || '',
+      clarifyTravelRequest.value,
+    )
   }
 
   // Wrapper that passes travel_request in the POST body
@@ -350,7 +349,7 @@ export const useTravelStore = defineStore('travel', () => {
     messages, versions, currentVersion, errors,
     isStreaming, totalDays,
     clarifyMessages, clarifyTravelRequest, clarifyThreadId, isClarifying, isReady,
-    sendClarifyMessage, startPlanningWithClarifiedRequest, continueClarify,
+    sendClarifyMessage, startPlanningWithClarifiedRequest, startPlanningWithRequest, continueClarify,
     startPlanning, cancelPlanning, rollback, reset, resetClarify, addMessage,
   }
 })
