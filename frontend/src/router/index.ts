@@ -71,6 +71,21 @@ const router = createRouter({
           name: 'admin-product-details',
           component: () => import('../views/AdminProductDetailPage.vue'),
         },
+        {
+          path: 'itinerary-templates',
+          name: 'admin-itinerary-templates',
+          component: () => import('../views/AdminItineraryTemplatesPage.vue'),
+        },
+        {
+          path: 'itinerary-templates/new',
+          name: 'admin-itinerary-template-new',
+          component: () => import('../views/AdminItineraryTemplateEditor.vue'),
+        },
+        {
+          path: 'itinerary-templates/:id/edit',
+          name: 'admin-itinerary-template-edit',
+          component: () => import('../views/AdminItineraryTemplateEditor.vue'),
+        },
       ],
     },
     {

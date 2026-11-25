@@ -4,7 +4,7 @@ from datetime import date, timedelta
 
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,12 +26,6 @@ from app.schemas.admin_resources import (
     ProductResponse,
     UnavailableReason,
 )
-
-
-async def begin_write(db: AsyncSession) -> None:
-    # SQLite ignores FOR UPDATE. Reserve the write transaction before reading dependencies.
-    if db.get_bind().dialect.name == "sqlite":
-        await db.execute(text("BEGIN IMMEDIATE"))
 
 
 async def flush(db: AsyncSession, on_conflict: str) -> None:

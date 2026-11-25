@@ -45,6 +45,7 @@ async def init_db():
     """Create all tables."""
     # Ensure all models are imported so they register with Base.metadata
     from app.db.resource_models import check_existing_price_offers
+    from app.db.template_models import ItineraryTemplate, ItineraryTemplateVersion  # noqa: F401
     from app.db.trip_version_migration import ensure_trip_version_index
     from app.db.user_role_migration import ensure_user_role_column
 

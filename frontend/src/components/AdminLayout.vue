@@ -67,6 +67,10 @@ onBeforeUnmount(() => request?.abort())
             <router-link class="admin-nav-link" to="/admin/suppliers">供应商</router-link>
             <router-link class="admin-nav-link" to="/admin/products">商品</router-link>
           </div>
+          <div class="admin-nav-group" aria-label="行程与内容">
+            <div class="admin-nav-label">行程与内容</div>
+            <router-link class="admin-nav-link" to="/admin/itinerary-templates">行程模板</router-link>
+          </div>
         </nav>
       </el-aside>
       <el-main class="admin-main">

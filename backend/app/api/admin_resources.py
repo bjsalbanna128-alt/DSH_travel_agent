@@ -2,11 +2,9 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Query, Response
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.db.database import get_db
+from app.api.deps import DbSession as DB, WriteDbSession as WriteDB
 from app.db.resource_models import Product, Supplier
 from app.schemas.admin_resources import (
     MAX_OFFER_DAYS,
@@ -35,18 +33,9 @@ from app.services import admin_resources as resources
 from app.services.admin_pois import find_binding_candidates
 
 router = APIRouter()
-DB = Annotated[AsyncSession, Depends(get_db)]
 Page = Annotated[int, Query(ge=1, le=1_000_000)]
 PageSize = Annotated[int, Query(ge=1, le=100)]
 OfferPageSize = Annotated[int, Query(ge=1, le=MAX_OFFER_DAYS)]
-
-
-async def write_session(db: DB) -> AsyncSession:
-    await resources.begin_write(db)
-    return db
-
-
-WriteDB = Annotated[AsyncSession, Depends(write_session)]
 
 
 @router.get("/suppliers", response_model=ResourcePage[SupplierResponse])

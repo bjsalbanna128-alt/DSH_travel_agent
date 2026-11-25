@@ -8,12 +8,21 @@ import { travelFetch } from './travel'
 
 type Query = Record<string, string | number | undefined>
 
+export interface ApiFieldIssue {
+  path: (string | number)[]
+  message: string
+}
+
 export class AdminRequestError extends Error {
   readonly dates: string[]
+  readonly issues: ApiFieldIssue[]
+  readonly status: number
 
-  constructor(message: string, dates: string[]) {
+  constructor(message: string, dates: string[], issues: ApiFieldIssue[], status: number) {
     super(message)
     this.dates = dates
+    this.issues = issues
+    this.status = status
   }
 }
 
@@ -29,16 +38,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     void auth.syncSession(true)
     void router.replace(operatorDeniedDestination())
   }
-  if (!res.ok) {
-    const { detail } = await res.json().catch(() => ({}))
-    const message = typeof detail === 'string' ? detail
-      : typeof detail?.message === 'string' ? detail.message
-      : Array.isArray(detail) ? detail.map(item => `${item.loc.at(-1)}：${item.msg}`).join('；')
-      : `请求失败（${res.status}），请重试。`
-    const dates = Array.isArray(detail?.dates) ? detail.dates : []
-    throw new AdminRequestError(message, dates)
-  }
+  if (!res.ok) throw await readApiError(res)
   return res.status === 204 ? undefined as T : res.json()
+}
+
+export async function readApiError(res: Response): Promise<AdminRequestError> {
+  const { detail } = await res.json().catch(() => ({}))
+  const validation: ApiFieldIssue[] = Array.isArray(detail)
+    ? detail.map(item => ({ path: item.loc ?? [], message: item.msg })) : []
+  const message = typeof detail === 'string' ? detail
+    : typeof detail?.message === 'string' ? detail.message
+    : validation.length ? validation.map(issue => `${issue.path.at(-1)}：${issue.message}`).join('；')
+    : `请求失败（${res.status}），请重试。`
+  return new AdminRequestError(
+    message, Array.isArray(detail?.dates) ? detail.dates : [],
+    Array.isArray(detail?.errors) ? detail.errors : validation, res.status,
+  )
 }
 
 function query(params: Query): string {
@@ -54,6 +69,8 @@ function write<T>(path: string, method: 'POST' | 'PATCH', body: object) {
     method, body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
   })
 }
+
+export { request as adminRequest, query as adminQueryString }
 
 const supplierPath = (id: string) => `/suppliers/${encodeURIComponent(id)}`
 const productPath = (id: string) => `/products/${encodeURIComponent(id)}`
