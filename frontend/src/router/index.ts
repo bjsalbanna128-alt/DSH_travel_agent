@@ -178,6 +178,16 @@ const router = createRouter({
           name: 'admin-member-detail',
           component: () => import('../views/AdminMemberDetailPage.vue'),
         },
+        {
+          path: 'trips',
+          name: 'admin-trips',
+          component: () => import('../views/AdminTripsPage.vue'),
+        },
+        {
+          path: 'trips/:id',
+          name: 'admin-trip-detail',
+          component: () => import('../views/AdminTripDetailPage.vue'),
+        },
       ],
     },
     {

@@ -124,7 +124,9 @@ async def apply_draft_decision(
     """Atomically confirm the reviewed version or replace it with an adjusted draft."""
     now = datetime.utcnow()
     if itinerary is None:
-        values = {"status": "completed", "updated_at": now}
+        # Confirming records which version the tourist approved; later edits and
+        # rollbacks never touch it (the UPDATE below only matches drafts).
+        values = {"status": "completed", "updated_at": now, "confirmed_version": version}
     else:
         next_version = await _next_version(db, trip_id, version)
         itinerary = {**itinerary, "version": next_version}
@@ -243,6 +245,7 @@ def _trip_to_dict(trip: Trip) -> dict:
         "travel_request": trip.travel_request,
         "itinerary": trip.itinerary,
         "version": trip.version,
+        "confirmed_version": trip.confirmed_version,
         "created_at": trip.created_at.isoformat() if trip.created_at else "",
         "updated_at": trip.updated_at.isoformat() if trip.updated_at else "",
     }

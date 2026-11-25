@@ -37,6 +37,9 @@ class User(Base):
 
 class Trip(Base):
     __tablename__ = "trips"
+    __table_args__ = (
+        Index("ix_trips_user_status_updated", "user_id", "status", "updated_at"),
+    )
 
     id = Column(String(36), primary_key=True, default=_gen_id)
     user_id = Column(String(36), default="anonymous")
@@ -49,6 +52,7 @@ class Trip(Base):
     travel_request = Column(JSON, default=dict)
     itinerary = Column(JSON, default=dict)
     version = Column(Integer, default=1)
+    confirmed_version = Column(Integer, nullable=True)  # version the tourist confirmed
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

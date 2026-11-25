@@ -47,6 +47,7 @@ async def init_db():
     from app.db import membership_models, recommendation_models  # noqa: F401
     from app.db.resource_models import check_existing_price_offers
     from app.db.template_models import ItineraryTemplate, ItineraryTemplateVersion  # noqa: F401
+    from app.db.trip_operator_migration import ensure_trip_operator_support
     from app.db.trip_version_migration import ensure_trip_version_index
     from app.db.user_role_migration import ensure_user_role_column
     from app.services.notifications import seed_message_settings
@@ -58,6 +59,7 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_user_role_column)
         await conn.run_sync(ensure_trip_version_index)
+        await conn.run_sync(ensure_trip_operator_support)
         await seed_message_settings(conn)
     print(f"[DB] Initialized at {DB_PATH}")
 
