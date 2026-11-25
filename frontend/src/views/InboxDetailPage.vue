@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { watch } from 'vue'
+import { computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { supportApi } from '../api/support'
 import { useAdminQuery } from '../composables/useAdminQuery'
@@ -7,8 +7,9 @@ import { notificationDestination } from '../supportLinks'
 import { supportTime } from '../types/support'
 
 const route = useRoute()
+const isOperatorView = computed(() => route.meta.area === 'b')
 const { data, loading, error, load, clear } = useAdminQuery(signal =>
-  supportApi.message(Boolean(route.meta.operatorOnly), String(route.params.id), signal))
+  supportApi.message(isOperatorView.value, String(route.params.id), signal))
 
 watch(() => route.params.id, () => {
   clear()
@@ -20,7 +21,7 @@ watch(() => route.params.id, () => {
   <section class="resource-page support-page">
     <header class="resource-titlebar support-title">
       <h1>{{ data?.confirmation ? '行程确认摘要' : '消息详情' }}</h1>
-      <router-link :to="{ name: route.meta.operatorOnly ? 'admin-messages' : 'messages' }" class="resource-link">返回我的消息</router-link>
+      <router-link :to="{ name: isOperatorView ? 'admin-messages' : 'messages' }" class="resource-link">返回我的消息</router-link>
     </header>
     <div v-if="error" class="resource-panel resource-stack">
       <el-alert :title="error" type="error" :closable="false" show-icon />

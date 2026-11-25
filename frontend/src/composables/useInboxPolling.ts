@@ -1,5 +1,6 @@
 import { computed, onMounted, onScopeDispose, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { areaMatches } from '../router'
 import { useAuthStore } from '../stores/auth'
 import { useInboxStore } from '../stores/inbox'
 
@@ -10,7 +11,7 @@ export function useInboxPolling() {
   const inbox = useInboxStore()
   const route = useRoute()
   const active = computed(() => Boolean(auth.user && !route.meta.public &&
-    ((auth.role === 'operator' && route.meta.operatorOnly) || (auth.role === 'tourist' && !route.meta.operatorOnly))))
+    areaMatches(auth.role, route.meta.area)))
   const isList = computed(() => route.name === 'messages' || route.name === 'admin-messages')
   let timer: number | undefined
 

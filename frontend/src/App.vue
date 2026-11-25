@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { watch } from 'vue'
+import { computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from './components/AdminLayout.vue'
 import InboxBadge from './components/InboxBadge.vue'
 import { useInboxPolling } from './composables/useInboxPolling'
-import { checkOperatorRoute, loginRedirect } from './router'
+import { areaMatches, loginRedirect, roleHome } from './router'
 import { useTravelStore } from './stores/travel'
 import { useAuthStore } from './stores/auth'
 import './support.css'
@@ -15,6 +15,9 @@ const route = useRoute()
 const router = useRouter()
 useInboxPolling()
 
+const isOperatorArea = computed(() => route.meta.area === 'b')
+const needsSession = computed(() => !route.meta.public && auth.isLoggedIn && !auth.user)
+
 watch(() => auth.sessionVersion, () => {
   store.cancelPlanning()
   store.reset()
@@ -24,16 +27,27 @@ watch(() => auth.sessionVersion, () => {
   }
 })
 
+// Once the role is known, leave any route that belongs to the other area.
+watch(
+  [() => auth.role, () => route.meta.area],
+  ([role, area]) => {
+    if (!role || !auth.isLoggedIn) return
+    if (!areaMatches(role, area)) void router.replace(roleHome(role))
+  },
+  { immediate: true },
+)
+
 async function retrySession() {
   await auth.syncSession()
-  const destination = checkOperatorRoute(route, auth.role)
-  if (destination) await router.replace(destination)
+  if (auth.role && !areaMatches(auth.role, route.meta.area)) {
+    await router.replace(roleHome(auth.role))
+  }
 }
 </script>
 
 <template>
   <div id="app">
-    <main v-if="!route.meta.public && auth.isLoggedIn && !auth.user" class="session-status">
+    <main v-if="needsSession" class="session-status">
       <template v-if="auth.sessionError">
         <el-alert :title="auth.sessionError" type="error" :closable="false" show-icon />
         <el-button @click="retrySession">重试</el-button>
@@ -41,11 +55,11 @@ async function retrySession() {
       <p v-else role="status">正在验证登录状态…</p>
     </main>
 
-    <AdminLayout v-else-if="route.meta.operatorOnly && auth.role === 'operator'">
+    <AdminLayout v-else-if="isOperatorArea && auth.role === 'operator'">
       <router-view :key="auth.sessionVersion + ':' + auth.userId" />
     </AdminLayout>
 
-    <el-container v-else-if="!route.meta.operatorOnly" class="app-container">
+    <el-container v-else-if="!isOperatorArea" class="app-container">
       <el-header class="app-header">
         <div class="header-left">
           <router-link to="/" class="logo">AI 旅游规划</router-link>
@@ -56,7 +70,6 @@ async function retrySession() {
             <router-link :to="{ name: 'messages' }" class="nav-link">我的消息<InboxBadge /></router-link>
             <router-link :to="{ name: 'my-tickets' }" class="nav-link">我的工单</router-link>
           </template>
-          <router-link v-if="auth.role === 'operator'" to="/admin" class="nav-link">企业运营后台</router-link>
           <router-link v-if="auth.isLoggedIn" to="/profile" class="nav-link">
             {{ auth.username }}
           </router-link>
@@ -68,10 +81,9 @@ async function retrySession() {
       </el-header>
 
       <el-main class="app-main">
-        <router-view :key="route.meta.touristOnly ? auth.sessionVersion + ':' + auth.userId : 'travel'" />
+        <router-view :key="route.meta.sessionScoped ? auth.sessionVersion + ':' + auth.userId : 'travel'" />
       </el-main>
     </el-container>
-
   </div>
 </template>
 

@@ -109,4 +109,23 @@
 
 ## 验证记录
 
-（实现后在此补充：实际执行的命令与结果、覆盖的行为、未验证事项。）
+已实现。具体做法与规格的对应关系：
+
+- 路由 meta 由 `operatorOnly` / `touristOnly` 统一改为 `area: 'c' | 'b'`：C 端 12 个路由标记 `area: 'c'`，`/admin` 父路由标记 `area: 'b'`（子路由继承）。原 `touristOnly` 承担的「切换账号后重新挂载」职责改由独立标记 `sessionScoped` 承担，只加在 `/messages`、`/messages/:id`、`/tickets`、`/tickets/:id` 四个路由上，行为与原来一致。
+- 守卫重写：公开路由放行，已登录访问登录/注册页直接回本区首页；未登录跳登录页并带 `redirect`；`syncSession` 后角色仍未知（会话请求失败）时不再跳转，交由 `App.vue` 渲染状态页，避免误判；角色已知且区域不匹配时静默返回本区首页。
+- `loginDestination` 增加区域校验：`redirect` 指向的区域不属于当前角色时忽略，按角色落到默认首页。这修掉了「游客带 `?redirect=/admin` 登录后被弹提示」的根因。
+- 删除 `checkOperatorRoute`（判断函数不再带 UI 副作用）；`operatorDeniedDestination` 保留，仅供接口 403 反馈使用，且返回本区首页。
+- `App.vue` 按 `area` 渲染布局，删掉 C 端头部的「企业运营后台」入口（运营已无法进入 C 端，该入口不可达）；新增 `watch(role, area)`，角色就绪后若当前路由属于对方区域立即纠正。
+- `useInboxPolling` 与 `InboxDetailPage` 改用 `area` 判断请求前缀与返回链接。
+
+已执行：
+
+- `npm run build` 通过（`vue-tsc` 类型检查 + vite 构建，659ms，仅既存 chunk 体积提示）。
+- 全仓检索确认无 `operatorOnly` / `touristOnly` / `checkOperatorRoute` 残留引用。
+- 逐条对照下面的验收清单做了代码走查：游客访问 `/admin`（静默回 `/`）、运营访问 `/`（静默回 `/admin`）、带 `?redirect=/admin` 的游客登录（落 `/` 且无提示）、已登录访问 `/login`（按角色回首页）、会话未就绪（渲染状态页，不渲染任一方主体）、接口 403（保留一次提示）。
+
+未验证：
+
+- 未在浏览器实际走查 9 条验收（本机没有浏览器自动化），需要人工按清单核对一遍。
+- 未验证登出后登录另一角色时，上一个角色的界面状态与未读轮询是否确实清空。
+- 未用真实接口 403 触发一次提示，仅确认代码路径。
