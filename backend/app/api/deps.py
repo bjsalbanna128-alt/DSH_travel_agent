@@ -4,10 +4,9 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.database import async_session, get_db
+from app.db.database import async_session, get_db, reserve_write
 from app.db.models import User, UserRole
 from app.services.auth_service import decode_access_token, get_user_by_id
 
@@ -65,9 +64,7 @@ DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 async def write_session(db: DbSession) -> AsyncSession:
     # SQLite ignores row locks. Reserve the write transaction before reading dependencies.
-    if db.get_bind().dialect.name == "sqlite":
-        await db.execute(text("BEGIN IMMEDIATE"))
-    return db
+    return await reserve_write(db)
 
 
 WriteDbSession = Annotated[AsyncSession, Depends(write_session)]

@@ -2,14 +2,18 @@
 import { watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminLayout from './components/AdminLayout.vue'
+import InboxBadge from './components/InboxBadge.vue'
+import { useInboxPolling } from './composables/useInboxPolling'
 import { checkOperatorRoute, loginRedirect } from './router'
 import { useTravelStore } from './stores/travel'
 import { useAuthStore } from './stores/auth'
+import './support.css'
 
 const store = useTravelStore()
 const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
+useInboxPolling()
 
 watch(() => auth.sessionVersion, () => {
   store.cancelPlanning()
@@ -38,7 +42,7 @@ async function retrySession() {
     </main>
 
     <AdminLayout v-else-if="route.meta.operatorOnly && auth.role === 'operator'">
-      <router-view />
+      <router-view :key="auth.sessionVersion + ':' + auth.userId" />
     </AdminLayout>
 
     <el-container v-else-if="!route.meta.operatorOnly" class="app-container">
@@ -48,6 +52,10 @@ async function retrySession() {
         </div>
         <div class="header-right">
           <router-link to="/history" class="nav-link">历史行程</router-link>
+          <template v-if="auth.role === 'tourist'">
+            <router-link :to="{ name: 'messages' }" class="nav-link">我的消息<InboxBadge /></router-link>
+            <router-link :to="{ name: 'my-tickets' }" class="nav-link">我的工单</router-link>
+          </template>
           <router-link v-if="auth.role === 'operator'" to="/admin" class="nav-link">企业运营后台</router-link>
           <router-link v-if="auth.isLoggedIn" to="/profile" class="nav-link">
             {{ auth.username }}
@@ -60,7 +68,7 @@ async function retrySession() {
       </el-header>
 
       <el-main class="app-main">
-        <router-view />
+        <router-view :key="route.meta.touristOnly ? auth.sessionVersion + ':' + auth.userId : 'travel'" />
       </el-main>
     </el-container>
 
@@ -82,4 +90,9 @@ body { font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f
 .app-main { background: #f5f7fa; padding: 24px; }
 .session-status { max-width: 480px; margin: 64px auto; padding: 0 16px; }
 .session-status .el-button { margin-top: 16px; }
+@media (max-width: 620px) {
+  .app-header { flex-wrap: wrap; gap: 8px; padding: 10px 14px; min-height: 60px; height: auto; }
+  .header-right { flex-wrap: wrap; gap: 9px 12px; }
+  .app-main { padding: 16px 12px; }
+}
 </style>

@@ -1,0 +1,14 @@
+.support-page { max-width: 1040px; }
+.support-title { flex-wrap: wrap; }
+.support-section-title { margin-bottom: 12px; }
+.support-copy { line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.support-meta { display: grid; gap: 8px; margin-top: 14px; color: #35475c; }
+.support-meta div { display: grid; grid-template-columns: minmax(84px, 118px) 1fr; gap: 10px; }
+.support-meta dd { overflow-wrap: anywhere; }
+.support-toolbar { margin-bottom: 12px; }
+.support-error { margin-bottom: 14px; }
+.support-empty { padding: 22px 0; color: #4d5d71; text-align: center; }
+@media (max-width: 640px) {
+  .support-page .el-table { --el-table-cell-padding: 6px; }
+  .support-meta div { grid-template-columns: 98px minmax(0, 1fr); }
+}

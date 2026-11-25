@@ -6,6 +6,7 @@ declare module 'vue-router' {
   interface RouteMeta {
     public?: boolean
     operatorOnly?: boolean
+    touristOnly?: boolean
   }
 }
 
@@ -46,6 +47,30 @@ const router = createRouter({
       path: '/profile',
       name: 'profile',
       component: () => import('../views/ProfilePage.vue'),
+    },
+    {
+      path: '/messages',
+      name: 'messages',
+      meta: { touristOnly: true },
+      component: () => import('../views/InboxPage.vue'),
+    },
+    {
+      path: '/messages/:id',
+      name: 'message-detail',
+      meta: { touristOnly: true },
+      component: () => import('../views/InboxDetailPage.vue'),
+    },
+    {
+      path: '/tickets',
+      name: 'my-tickets',
+      meta: { touristOnly: true },
+      component: () => import('../views/TicketListPage.vue'),
+    },
+    {
+      path: '/tickets/:id',
+      name: 'my-ticket-detail',
+      meta: { touristOnly: true },
+      component: () => import('../views/TicketDetailPage.vue'),
     },
     {
       path: '/admin',
@@ -101,6 +126,33 @@ const router = createRouter({
           name: 'admin-recommendation-edit',
           component: () => import('../views/AdminRecommendationEditor.vue'),
         },
+        {
+          path: 'messages',
+          name: 'admin-messages',
+          component: () => import('../views/InboxPage.vue'),
+        },
+        {
+          path: 'messages/:id',
+          name: 'admin-message-detail',
+          component: () => import('../views/InboxDetailPage.vue'),
+        },
+        {
+          path: 'message-settings',
+          name: 'admin-message-settings',
+          component: () => import('../views/MessageSettingsPage.vue'),
+        },
+        {
+          path: 'tickets',
+          name: 'admin-tickets',
+          component: () => import('../views/TicketListPage.vue'),
+          props: { operator: true },
+        },
+        {
+          path: 'tickets/:id',
+          name: 'admin-ticket-detail',
+          component: () => import('../views/TicketDetailPage.vue'),
+          props: { operator: true },
+        },
       ],
     },
     {
@@ -137,6 +189,7 @@ export function operatorDeniedDestination() {
 
 export function checkOperatorRoute(to: RouteLocationNormalized, role: AuthRole | undefined) {
   if (to.meta.operatorOnly && role === 'tourist') return operatorDeniedDestination()
+  if (to.meta.touristOnly && role === 'operator') return { name: 'admin-home' }
 }
 
 router.beforeEach(async (to) => {

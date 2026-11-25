@@ -3,6 +3,7 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { operatorDeniedDestination } from '../router'
 import { useAuthStore, type AuthUser } from '../stores/auth'
+import InboxBadge from './InboxBadge.vue'
 import '../adminResources.css'
 
 const router = useRouter()
@@ -71,6 +72,15 @@ onBeforeUnmount(() => request?.abort())
             <div class="admin-nav-label">行程与内容</div>
             <router-link class="admin-nav-link" to="/admin/itinerary-templates">行程模板</router-link>
             <router-link class="admin-nav-link" to="/admin/recommendations">推荐内容</router-link>
+          </div>
+          <div class="admin-nav-group" aria-label="消息管理">
+            <div class="admin-nav-label">消息管理</div>
+            <router-link class="admin-nav-link" :to="{ name: 'admin-messages' }">我的消息<InboxBadge /></router-link>
+            <router-link class="admin-nav-link" :to="{ name: 'admin-message-settings' }">消息配置</router-link>
+          </div>
+          <div class="admin-nav-group" aria-label="客服售后">
+            <div class="admin-nav-label">客服售后</div>
+            <router-link class="admin-nav-link" :to="{ name: 'admin-tickets' }">工单</router-link>
           </div>
         </nav>
       </el-aside>

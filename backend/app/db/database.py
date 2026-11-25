@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -49,6 +49,7 @@ async def init_db():
     from app.db.template_models import ItineraryTemplate, ItineraryTemplateVersion  # noqa: F401
     from app.db.trip_version_migration import ensure_trip_version_index
     from app.db.user_role_migration import ensure_user_role_column
+    from app.services.notifications import seed_message_settings
 
     async with engine.begin() as conn:
         if conn.dialect.name == "sqlite":
@@ -57,7 +58,14 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_user_role_column)
         await conn.run_sync(ensure_trip_version_index)
+        await seed_message_settings(conn)
     print(f"[DB] Initialized at {DB_PATH}")
+
+
+async def reserve_write(db: AsyncSession) -> AsyncSession:
+    if db.get_bind().dialect.name == "sqlite":
+        await db.execute(text("BEGIN IMMEDIATE"))
+    return db
 
 
 async def get_db() -> AsyncIterator[AsyncSession]:

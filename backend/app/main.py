@@ -24,8 +24,11 @@ from app.api.sse import router as sse_router
 from app.api.chat import router as chat_router
 from app.api.ws import router as ws_router
 from app.api.auth import router as auth_router
+from app.api.support import tourist_router as support_router
 from app.config import settings
+from app.db import database
 from app.db.database import init_db
+from app.services.notifications import notification_worker
 
 
 @asynccontextmanager
@@ -61,7 +64,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         print("[TravelAgent] Redis unavailable — caching disabled")
 
-    yield
+    async with notification_worker(database.async_session):
+        yield
     print("[TravelAgent] Shutting down")
 
 
@@ -86,6 +90,7 @@ app.include_router(chat_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
 app.include_router(template_reader_router, prefix="/api")
 app.include_router(recommendation_reader_router, prefix="/api")
+app.include_router(support_router, prefix="/api")
 app.include_router(admin_router, prefix="/api", dependencies=[Depends(require_operator)])
 app.include_router(ws_router)
 

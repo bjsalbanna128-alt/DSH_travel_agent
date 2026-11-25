@@ -6,13 +6,14 @@ import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.core.exceptions import LLMCallError, ParseError
 from app.graph.nodes.agents import _estimate_travel, _route_distance
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from app.schemas.travel_state import Attraction, Hotel, Restaurant, Route, TransportOption
 from app.services.itinerary_costs import estimate_day_cost, traveler_count
+from app.services.notifications import enqueue_trip_confirmation, wake_delivery
 from app.services.trip_store import (
     TripRevisionConflict,
     TripThreadConflict,
@@ -199,13 +200,22 @@ async def review_draft(
             raise ReviewError(422, "请填写调整意见")
         revised = await _revise_itinerary(trip, feedback)
 
+    event_queued = False
     try:
         async with sessions.begin() as db:
             saved, newly_confirmed = await apply_draft_decision(
                 db, trip["id"], user_id, decision.version, revised
             )
+            if newly_confirmed:
+                event_queued = await enqueue_trip_confirmation(db, user_id, saved)
     except TripRevisionConflict as exc:
         raise ReviewError(409, "行程版本或状态已变化，请刷新后重试") from exc
+    except SQLAlchemyError as exc:
+        logger.warning("Could not persist trip decision for %s", trip["id"])
+        raise ReviewError(503, "暂时无法保存行程处理结果，请稍后重试") from exc
+
+    if event_queued:
+        wake_delivery()
 
     return saved, newly_confirmed
 

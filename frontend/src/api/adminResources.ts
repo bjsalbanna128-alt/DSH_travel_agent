@@ -30,11 +30,11 @@ export function adminError(error: unknown): string {
   return error instanceof Error ? error.message : '操作失败，请重试。'
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(path: string, init?: RequestInit, { redirectOnForbidden = true } = {}): Promise<T> {
   const auth = useAuthStore()
   const version = auth.sessionVersion
   const res = await travelFetch(`/api/v1/admin${path}`, init)
-  if (res.status === 403 && version === auth.sessionVersion && !init?.signal?.aborted) {
+  if (redirectOnForbidden && res.status === 403 && version === auth.sessionVersion && !init?.signal?.aborted) {
     void auth.syncSession(true)
     void router.replace(operatorDeniedDestination())
   }
