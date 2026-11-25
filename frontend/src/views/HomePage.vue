@@ -2,13 +2,17 @@
 import { ref, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTravelStore } from '../stores/travel'
+import HomeRecommendations from '../components/HomeRecommendations.vue'
 
 const store = useTravelStore()
 const router = useRouter()
 
 const inputText = ref('')
+const inputStarted = ref(false)
+const travelInput = ref<{ focus: () => void }>()
 const chatContainer = ref<HTMLElement | null>(null)
 const sending = ref(false)
+watch(inputText, text => { if (text.length) inputStarted.value = true }, { flush: 'sync' })
 
 const exampleQueries = [
   '和兄弟去成都玩3天',
@@ -63,6 +67,7 @@ store.resetClarify()
 
 <template>
   <div class="home-page">
+    <HomeRecommendations :input-started="inputStarted" @closed="travelInput?.focus()" />
     <!-- Header -->
     <div class="home-header">
       <h1>AI 旅行规划师</h1>
@@ -120,6 +125,7 @@ store.resetClarify()
       <!-- Input area -->
       <div class="chat-input-area">
         <el-input
+          ref="travelInput"
           v-model="inputText"
           type="textarea"
           :rows="1"

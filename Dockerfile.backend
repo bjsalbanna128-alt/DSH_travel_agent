@@ -30,7 +30,8 @@ RUN pip install --no-cache-dir \
     scipy>=1.14.0 \
     sentence-transformers>=3.0.0 \
     python-dotenv>=1.0.0 \
-    aiosqlite>=0.20.0
+    aiosqlite>=0.20.0 \
+    "Pillow>=12.2.0"
 
 # Copy source
 COPY backend/ .

@@ -1,5 +1,9 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
+import {
+  LOGIN_SESSION_KEY, randomSessionId, readLoginSession, recoverLegacySession,
+  saveLoginSession, type LoginSession,
+} from '../utils/recommendationSession'
 
 const TOKEN_KEY = 'travel_auth_token'
 const USER_KEY = 'travel_auth_user'
@@ -17,6 +21,7 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<AuthUser | null>(null)
   const sessionVersion = ref(0)
   const sessionError = ref('')
+  const loginSession = ref<LoginSession>()
   let sessionRequest: Promise<void> | null = null
   let credentialAttempt = 0
 
@@ -53,6 +58,11 @@ export const useAuthStore = defineStore('auth', () => {
       beginSession()
       token.value = data.access_token
       localStorage.setItem(TOKEN_KEY, data.access_token)
+      saveLoginSession()
+      try {
+        const session = { accountId: data.user_id, id: randomSessionId() }
+        if (saveLoginSession(session)) loginSession.value = session
+      } catch { /* Login remains available without display tracking. */ }
       saveUser({ user_id: data.user_id, username: data.username, role: data.role })
       return true
     } catch (error) {
@@ -80,7 +90,10 @@ export const useAuthStore = defineStore('auth', () => {
         }
         if (!res.ok) throw new Error('Could not restore session')
         const account: AuthUser = await res.json()
-        if (version === sessionVersion.value) saveUser(account)
+        if (version === sessionVersion.value) {
+          saveUser(account)
+          if (account.role === 'tourist') void restoreLoginSession(account.user_id, version)
+        }
       } catch {
         if (version === sessionVersion.value) {
           sessionError.value = '登录状态加载失败，请重试。'
@@ -99,6 +112,7 @@ export const useAuthStore = defineStore('auth', () => {
     user.value = null
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
+    saveLoginSession()
   }
 
   function getAuthHeader(): Record<string, string> {
@@ -112,6 +126,7 @@ export const useAuthStore = defineStore('auth', () => {
     sessionVersion.value++
     sessionRequest = null
     sessionError.value = ''
+    loginSession.value = undefined
   }
 
   function saveUser(account: AuthUser) {
@@ -119,8 +134,45 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem(USER_KEY, JSON.stringify(account))
   }
 
+  async function restoreLoginSession(accountId: string, version: number) {
+    const stored = readLoginSession()
+    if (stored) {
+      loginSession.value = stored.accountId === accountId ? stored : undefined
+      return
+    }
+    const activeToken = token.value
+    try {
+      const id = await recoverLegacySession(accountId)
+      if (sessionVersion.value !== version || activeToken !== localStorage.getItem(TOKEN_KEY)) return
+      const current = readLoginSession()
+      if (current && current.accountId !== accountId) return
+      const session = current ?? { accountId, id }
+      if (saveLoginSession(session)) loginSession.value = session
+    } catch { /* The home page can still be used when storage is unavailable. */ }
+  }
+
+  function syncOtherTab(event: StorageEvent) {
+    if (event.key !== TOKEN_KEY && event.key !== LOGIN_SESSION_KEY && event.key !== null) return
+    const currentToken = localStorage.getItem(TOKEN_KEY)
+    const current = readLoginSession()
+    if (currentToken === token.value) {
+      if (!user.value || current?.accountId === user.value.user_id || !current) {
+        loginSession.value = user.value && current?.accountId === user.value.user_id ? current : undefined
+        return
+      }
+    }
+    credentialAttempt++
+    beginSession()
+    user.value = null
+    token.value = currentToken
+    if (currentToken) void syncSession()
+  }
+
+  window.addEventListener('storage', syncOtherTab)
+  onScopeDispose(() => window.removeEventListener('storage', syncOtherTab))
+
   return {
-    token, user, isLoggedIn, userId, username, role, sessionVersion, sessionError,
+    token, user, isLoggedIn, userId, username, role, sessionVersion, sessionError, loginSession,
     login, register, logout, getAuthHeader, syncSession,
   }
 })

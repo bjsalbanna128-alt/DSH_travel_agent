@@ -86,6 +86,21 @@ const router = createRouter({
           name: 'admin-itinerary-template-edit',
           component: () => import('../views/AdminItineraryTemplateEditor.vue'),
         },
+        {
+          path: 'recommendations',
+          name: 'admin-recommendations',
+          component: () => import('../views/AdminRecommendationsPage.vue'),
+        },
+        {
+          path: 'recommendations/new',
+          name: 'admin-recommendation-new',
+          component: () => import('../views/AdminRecommendationEditor.vue'),
+        },
+        {
+          path: 'recommendations/:id/edit',
+          name: 'admin-recommendation-edit',
+          component: () => import('../views/AdminRecommendationEditor.vue'),
+        },
       ],
     },
     {
