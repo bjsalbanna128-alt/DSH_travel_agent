@@ -1,9 +1,10 @@
 """Async database engine and session management (SQLite)."""
 
-import os
+from collections.abc import AsyncIterator
 from pathlib import Path
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
@@ -20,11 +21,18 @@ DATABASE_URL = SQLITE_URL
 if settings.database_url and "postgresql" in settings.database_url:
     DATABASE_URL = settings.database_url
 
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,
-    connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
-)
+def create_db_engine(url: str, **kwargs) -> AsyncEngine:
+    db_engine = create_async_engine(url, **kwargs)
+    if db_engine.dialect.name == "sqlite":
+        @event.listens_for(db_engine.sync_engine, "connect")
+        def enable_foreign_keys(connection, _record) -> None:
+            cursor = connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+    return db_engine
+
+
+engine = create_db_engine(DATABASE_URL)
 
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -36,19 +44,21 @@ class Base(DeclarativeBase):
 async def init_db():
     """Create all tables."""
     # Ensure all models are imported so they register with Base.metadata
+    from app.db.resource_models import check_existing_price_offers
     from app.db.trip_version_migration import ensure_trip_version_index
     from app.db.user_role_migration import ensure_user_role_column
 
     async with engine.begin() as conn:
         if conn.dialect.name == "sqlite":
             await conn.exec_driver_sql("BEGIN IMMEDIATE")
+        await conn.run_sync(check_existing_price_offers)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_user_role_column)
         await conn.run_sync(ensure_trip_version_index)
     print(f"[DB] Initialized at {DB_PATH}")
 
 
-async def get_db() -> AsyncSession:
+async def get_db() -> AsyncIterator[AsyncSession]:
     """Dependency for FastAPI route handlers."""
     async with async_session() as session:
         try:

@@ -3,6 +3,7 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { operatorDeniedDestination } from '../router'
 import { useAuthStore, type AuthUser } from '../stores/auth'
+import '../adminResources.css'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -61,6 +62,11 @@ onBeforeUnmount(() => request?.abort())
       <el-aside class="admin-sidebar" width="200px">
         <nav aria-label="运营导航">
           <router-link class="admin-nav-link" to="/admin">首页</router-link>
+          <div class="admin-nav-group" aria-label="资源管理">
+            <div class="admin-nav-label">资源管理</div>
+            <router-link class="admin-nav-link" to="/admin/suppliers">供应商</router-link>
+            <router-link class="admin-nav-link" to="/admin/products">商品</router-link>
+          </div>
         </nav>
       </el-aside>
       <el-main class="admin-main">
@@ -91,7 +97,9 @@ onBeforeUnmount(() => request?.abort())
   display: block; padding: 11px 14px; border-radius: 6px;
   color: #234d91; font-size: 14px; text-decoration: none;
 }
-.admin-nav-link.router-link-active { background: #edf3ff; font-weight: 600; }
+.admin-nav-link.router-link-exact-active { background: #edf3ff; font-weight: 600; }
+.admin-nav-group { margin-top: 16px; }
+.admin-nav-label { color: #5d6878; padding: 0 14px 5px; font-size: 12px; font-weight: 650; }
 .admin-main { padding: 32px; }
 .admin-status { width: min(100%, 480px); margin: 40px auto; }
 .admin-status .el-button { margin-top: 16px; }

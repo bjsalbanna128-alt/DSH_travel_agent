@@ -43,6 +43,8 @@ async def search_poi(
     poi_type: str = "attraction",
     offset: int = 15,
     page: int = 1,
+    *,
+    city_only: bool = False,
 ) -> PoiSearchResult:
     """Search Amap POI and return normalized results (cached 24h)."""
     api_key = settings.amap_api_key
@@ -51,6 +53,8 @@ async def search_poi(
 
     # Try Redis cache first (24h TTL since POI data changes slowly)
     cache_key = f"amap:{city}:{poi_type}:{keywords}:{offset}:{page}"
+    if city_only:
+        cache_key += ":citylimit"
     try:
         from app.services.redis_cache import cache_get_json
 
@@ -74,6 +78,8 @@ async def search_poi(
     }
     if types:
         params["types"] = types
+    if city_only:
+        params["citylimit"] = "true"
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -101,7 +107,11 @@ async def search_poi(
     results = []
     for poi in pois:
         try:
-            results.append(_parse_poi(poi, poi_type))
+            item = _parse_poi(poi, poi_type)
+            if city_only:
+                city_name = poi.get("cityname")
+                item["city"] = city_name if isinstance(city_name, str) and city_name else city
+            results.append(item)
         except (ValueError, TypeError, OverflowError):
             continue
 

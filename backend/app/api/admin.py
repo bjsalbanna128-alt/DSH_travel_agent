@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.api.admin_resources import router as resource_router
 from app.api.auth import AccountResponse
 from app.api.deps import CurrentOperator
 
@@ -11,3 +12,6 @@ router = APIRouter(prefix="/v1/admin", tags=["admin"])
 @router.get("/session", response_model=AccountResponse)
 async def admin_session(account: CurrentOperator):
     return AccountResponse.from_account(account)
+
+
+router.include_router(resource_router)

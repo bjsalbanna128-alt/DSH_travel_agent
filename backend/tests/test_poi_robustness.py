@@ -59,6 +59,22 @@ async def test_biz_ext_list_and_null_keep_poi(amap_backend, poi_type, price_fiel
     )
 
 
+async def test_admin_city_lookup_uses_separate_cache_and_preserves_poi_city(amap_backend):
+    handler, cache = amap_backend
+    handler.return_value = httpx.Response(200, json={"status": "1", "pois": [
+        _poi("酒店", cityname="成都市"),
+    ]})
+
+    result = await amap.search_poi("酒店", "成都", poi_type="hotel", city_only=True)
+
+    assert handler.call_args.args[0].url.params["citylimit"] == "true"
+    assert result.items[0]["city"] == "成都市"
+    cache.cache_get_json.assert_awaited_once_with("amap:成都:hotel:酒店:15:1:citylimit")
+    cache.cache_set_json.assert_awaited_once_with(
+        "amap:成都:hotel:酒店:15:1:citylimit", result.items, ttl=86400,
+    )
+
+
 @pytest.mark.asyncio
 async def test_bad_poi_fields_do_not_drop_batch(amap_backend):
     handler, cache = amap_backend

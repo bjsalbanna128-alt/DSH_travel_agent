@@ -339,6 +339,19 @@ class ChromaStore:
         except Exception:
             return 0
 
+    def find_poi_names(self, city: str, keyword: str, kind: str) -> list[dict]:
+        """Read the stored POI ID and metadata without embedding a search query."""
+        collection = {"hotel": "hotels", "attraction": "attractions"}[kind]
+        city_name = city.removesuffix("市")
+        matches = self._client.get_collection(collection).get(
+            where={"city": {"$in": [city_name, f"{city_name}市"]}}, include=["metadatas"],
+        )
+        return [
+            {"id": record_id, "name": meta["name"], "city": meta["city"]}
+            for record_id, meta in zip(matches["ids"], matches["metadatas"] or [])
+            if meta and keyword.casefold() in str(meta.get("name", "")).casefold()
+        ][:25]
+
     def delete_collection(self, name: str):
         """Delete a collection by name (used for re-seeding)."""
         try:

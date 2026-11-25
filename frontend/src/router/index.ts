@@ -56,6 +56,21 @@ const router = createRouter({
           name: 'admin-home',
           component: () => import('../views/AdminHomePage.vue'),
         },
+        {
+          path: 'suppliers',
+          name: 'admin-suppliers',
+          component: () => import('../views/AdminSuppliersPage.vue'),
+        },
+        {
+          path: 'products',
+          name: 'admin-products',
+          component: () => import('../views/AdminProductsPage.vue'),
+        },
+        {
+          path: 'products/:id',
+          name: 'admin-product-details',
+          component: () => import('../views/AdminProductDetailPage.vue'),
+        },
       ],
     },
     {
