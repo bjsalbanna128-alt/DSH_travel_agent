@@ -2,8 +2,9 @@
 
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
-from sqlalchemy import Column, String, Integer, Float, DateTime, Index, JSON, Text
+from sqlalchemy import CheckConstraint, Column, String, Integer, Float, DateTime, Index, JSON, Text
 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 
 from app.db.database import Base
@@ -13,13 +14,23 @@ def _gen_id() -> str:
     return str(uuid.uuid4())
 
 
+class UserRole(StrEnum):
+    TOURIST = "tourist"
+    OPERATOR = "operator"
+
+
+USER_ROLE_CHECK = "role IN ('tourist', 'operator')"
+
+
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (CheckConstraint(USER_ROLE_CHECK, name="ck_users_role"),)
 
     id = Column(String(36), primary_key=True, default=_gen_id)
     username = Column(String(50), unique=True, nullable=False, index=True)
     email = Column(String(100), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    role = Column(String(20), nullable=False, default=UserRole.TOURIST, server_default=UserRole.TOURIST)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

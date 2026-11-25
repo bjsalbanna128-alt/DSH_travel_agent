@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { loginDestination } from '../router'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
@@ -13,6 +14,7 @@ const loading = ref(false)
 const error = ref('')
 
 async function handleLogin() {
+  if (loading.value) return
   if (!username.value || !password.value) {
     error.value = '请填写用户名和密码'
     return
@@ -20,12 +22,9 @@ async function handleLogin() {
   loading.value = true
   error.value = ''
   try {
-    await auth.login(username.value, password.value)
-    const redirect = route.query.redirect
-    const target = typeof redirect === 'string' && redirect.startsWith('/') && !redirect.startsWith('//')
-      ? router.resolve(redirect)
-      : null
-    await router.replace(target?.matched.length && !target.meta.public ? target.fullPath : '/')
+    if (await auth.login(username.value, password.value)) {
+      await router.replace(loginDestination(route.query.redirect, auth.role))
+    }
   } catch (e: any) {
     error.value = e.message || '登录失败'
   } finally {
@@ -38,7 +37,7 @@ async function handleLogin() {
   <div class="auth-page">
     <div class="auth-card">
       <h2>登录</h2>
-      <p class="subtitle">登录后可使用个性化旅行偏好记忆</p>
+      <p class="subtitle">使用游客或运营账号登录</p>
       <el-form @submit.prevent="handleLogin" label-position="top">
         <el-form-item label="用户名">
           <el-input v-model="username" placeholder="请输入用户名" />

@@ -10,10 +10,11 @@ const API_BASE = '/api/v1'
 export async function travelFetch(url: string, init?: RequestInit): Promise<Response> {
   const auth = useAuthStore()
   const token = auth.token
+  const sessionVersion = auth.sessionVersion
   const headers = new Headers(init?.headers)
   if (token) headers.set('Authorization', `Bearer ${token}`)
   const response = await fetch(url, { ...init, headers })
-  if (response.status === 401 && auth.token === token) auth.logout()
+  if (token && response.status === 401 && auth.sessionVersion === sessionVersion) auth.logout()
   return response
 }
 

@@ -12,9 +12,11 @@ print(f"[Main] Loaded env from {_ENV_PATH}, DEEPSEEK_API_KEY={'SET' if os.enviro
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.admin import router as admin_router
+from app.api.deps import require_operator
 from app.api.routes import router as api_router
 from app.api.sse import router as sse_router
 from app.api.chat import router as chat_router
@@ -80,6 +82,7 @@ app.include_router(sse_router, prefix="/api")
 app.include_router(api_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(auth_router, prefix="/api")
+app.include_router(admin_router, prefix="/api", dependencies=[Depends(require_operator)])
 app.include_router(ws_router)
 
 

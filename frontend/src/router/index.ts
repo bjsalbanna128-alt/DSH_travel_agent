@@ -1,5 +1,13 @@
-import { createRouter, createWebHistory } from 'vue-router'
-import { useAuthStore } from '../stores/auth'
+import { ElMessage } from 'element-plus'
+import { createRouter, createWebHistory, type RouteLocationNormalized } from 'vue-router'
+import { useAuthStore, type AuthRole } from '../stores/auth'
+
+declare module 'vue-router' {
+  interface RouteMeta {
+    public?: boolean
+    operatorOnly?: boolean
+  }
+}
 
 const router = createRouter({
   history: createWebHistory(),
@@ -40,6 +48,17 @@ const router = createRouter({
       component: () => import('../views/ProfilePage.vue'),
     },
     {
+      path: '/admin',
+      meta: { operatorOnly: true },
+      children: [
+        {
+          path: '',
+          name: 'admin-home',
+          component: () => import('../views/AdminHomePage.vue'),
+        },
+      ],
+    },
+    {
       path: '/login',
       name: 'login',
       meta: { public: true },
@@ -54,10 +73,35 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to) => {
-  if (!to.meta.public && !useAuthStore().isLoggedIn) {
-    return { name: 'login', query: { redirect: to.fullPath } }
+export function loginRedirect(path: string) {
+  return { name: 'login', query: { redirect: path } }
+}
+
+export function loginDestination(redirect: unknown, role: AuthRole | undefined) {
+  if (typeof redirect === 'string' && redirect.startsWith('/') && !/^\/[\/\\]/.test(redirect)) {
+    const target = router.resolve(redirect)
+    if (target.matched.length && !target.meta.public) return target.fullPath
   }
+  return { name: role === 'operator' ? 'admin-home' : 'home' }
+}
+
+export function operatorDeniedDestination() {
+  ElMessage.warning('需要运营身份才能访问企业运营后台')
+  return { name: 'home' }
+}
+
+export function checkOperatorRoute(to: RouteLocationNormalized, role: AuthRole | undefined) {
+  if (to.meta.operatorOnly && role === 'tourist') return operatorDeniedDestination()
+}
+
+router.beforeEach(async (to) => {
+  if (to.meta.public) return
+  const auth = useAuthStore()
+  if (!auth.isLoggedIn) return loginRedirect(to.fullPath)
+
+  await auth.syncSession()
+  if (!auth.isLoggedIn) return loginRedirect(to.fullPath)
+  return checkOperatorRoute(to, auth.role)
 })
 
 export default router

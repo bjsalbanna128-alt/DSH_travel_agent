@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import AdminLayout from './components/AdminLayout.vue'
+import { checkOperatorRoute, loginRedirect } from './router'
 import { useTravelStore } from './stores/travel'
 import { useAuthStore } from './stores/auth'
 
@@ -9,25 +11,44 @@ const auth = useAuthStore()
 const route = useRoute()
 const router = useRouter()
 
-watch(() => auth.token, () => {
+watch(() => auth.sessionVersion, () => {
   store.cancelPlanning()
   store.reset()
   store.resetClarify()
   if (!auth.isLoggedIn && !route.meta.public) {
-    void router.replace({ name: 'login', query: { redirect: route.fullPath } })
+    void router.replace(loginRedirect(route.fullPath))
   }
 })
+
+async function retrySession() {
+  await auth.syncSession()
+  const destination = checkOperatorRoute(route, auth.role)
+  if (destination) await router.replace(destination)
+}
 </script>
 
 <template>
   <div id="app">
-    <el-container class="app-container">
+    <main v-if="!route.meta.public && auth.isLoggedIn && !auth.user" class="session-status">
+      <template v-if="auth.sessionError">
+        <el-alert :title="auth.sessionError" type="error" :closable="false" show-icon />
+        <el-button @click="retrySession">重试</el-button>
+      </template>
+      <p v-else role="status">正在验证登录状态…</p>
+    </main>
+
+    <AdminLayout v-else-if="route.meta.operatorOnly && auth.role === 'operator'">
+      <router-view />
+    </AdminLayout>
+
+    <el-container v-else-if="!route.meta.operatorOnly" class="app-container">
       <el-header class="app-header">
         <div class="header-left">
           <router-link to="/" class="logo">AI 旅游规划</router-link>
         </div>
         <div class="header-right">
           <router-link to="/history" class="nav-link">历史行程</router-link>
+          <router-link v-if="auth.role === 'operator'" to="/admin" class="nav-link">企业运营后台</router-link>
           <router-link v-if="auth.isLoggedIn" to="/profile" class="nav-link">
             {{ auth.username }}
           </router-link>
@@ -59,4 +80,6 @@ body { font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f
 .nav-link { color: #606266; text-decoration: none; font-size: 14px; }
 .nav-link:hover { color: #409eff; }
 .app-main { background: #f5f7fa; padding: 24px; }
+.session-status { max-width: 480px; margin: 64px auto; padding: 0 16px; }
+.session-status .el-button { margin-top: 16px; }
 </style>

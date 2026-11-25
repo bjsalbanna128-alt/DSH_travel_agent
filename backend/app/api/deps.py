@@ -6,33 +6,54 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.db.database import async_session
+from app.db.models import User, UserRole
 from app.services.auth_service import decode_access_token, get_user_by_id
 
 security = HTTPBearer(auto_error=False)
 
 
-async def authenticate_user(token: str) -> str | None:
-    """Return the ID of an existing account with a valid token."""
+async def _authenticate_account(token: str) -> User | None:
     user_id = decode_access_token(token)
     if not user_id:
         return None
     async with async_session() as db:
-        user = await get_user_by_id(db, user_id)
-        return user.id if user else None
+        return await get_user_by_id(db, user_id)
 
 
-async def get_current_user(
+async def authenticate_user(token: str) -> str | None:
+    """Return the ID of an existing account with a valid token."""
+    account = await _authenticate_account(token)
+    return account.id if account is not None else None
+
+
+async def get_current_account(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
-) -> str:
+) -> User:
     """Require a valid JWT Bearer token for a business endpoint."""
-    user_id = await authenticate_user(credentials.credentials) if credentials else None
-    if user_id is None:
+    account = await _authenticate_account(credentials.credentials) if credentials else None
+    if account is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="请登录后使用旅游服务",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return user_id
+    return account
+
+
+CurrentAccount = Annotated[User, Depends(get_current_account)]
+
+
+async def get_current_user(account: CurrentAccount) -> str:
+    return account.id
 
 
 CurrentUserId = Annotated[str, Depends(get_current_user)]
+
+
+async def require_operator(account: CurrentAccount) -> User:
+    if account.role != UserRole.OPERATOR:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要运营身份")
+    return account
+
+
+CurrentOperator = Annotated[User, Depends(require_operator)]

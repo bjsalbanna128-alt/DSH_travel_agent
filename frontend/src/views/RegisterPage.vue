@@ -14,6 +14,7 @@ const loading = ref(false)
 const error = ref('')
 
 async function handleRegister() {
+  if (loading.value) return
   if (!username.value || !email.value || !password.value) {
     error.value = '请填写所有字段'
     return
@@ -29,8 +30,9 @@ async function handleRegister() {
   loading.value = true
   error.value = ''
   try {
-    await auth.register(username.value, email.value, password.value)
-    router.push('/')
+    if (await auth.register(username.value, email.value, password.value)) {
+      await router.push('/')
+    }
   } catch (e: any) {
     error.value = e.message || '注册失败'
   } finally {
