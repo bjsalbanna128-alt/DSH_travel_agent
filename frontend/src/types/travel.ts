@@ -73,12 +73,26 @@ export interface TransportOption {
   to_location: string
   departure_time: string
   arrival_time: string
+  duration_minutes?: number
   price_cny: number
   booking_url: string
 }
 
+// 城际段只有区间预估，不带发车时刻
+export interface IntercityEstimate {
+  type: string
+  from_location: string
+  to_location: string
+  duration_hours_min: number
+  duration_hours_max: number
+  price_cny_min: number
+  price_cny_max: number
+  is_estimate: boolean
+  note: string
+}
+
 export interface TransportPlan {
-  intercity: TransportOption[]
+  intercity: IntercityEstimate[]
   intraday: TransportOption[][]
 }
 
@@ -100,6 +114,7 @@ export interface Itinerary {
   duration_days: number
   total_budget_estimate_cny: number
   day_plans: DayPlan[]
+  intercity_estimates?: IntercityEstimate[]
   overall_tips: string
   version: number
   created_at: string

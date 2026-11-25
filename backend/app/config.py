@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     chroma_persist_path: str = "./chroma_data"
     embedding_model_name: str = "BAAI/bge-small-zh-v1.5"
 
+    # ── 城内交通估价（单人单段）──────────────────────────
+    transport_walk_fare_cny: float = 0.0
+    transport_bus_fare_cny: float = 2.0
+    transport_metro_fare_cny: float = 3.0
+    transport_taxi_base_cny: float = 13.0
+    transport_taxi_per_km_cny: float = 2.5
+
     # ── JWT ───────────────────────────────────────────────
     jwt_secret_key: str = "dev-secret-change-in-production"
     jwt_algorithm: str = "HS256"

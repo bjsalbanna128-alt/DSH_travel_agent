@@ -90,16 +90,26 @@ const categoryTag = (cat: string) => {
   return map[cat] || cat
 }
 
+const intercityTotal = computed(() =>
+  (itinerary.value?.intercity_estimates ?? []).reduce(
+    (sum, item) => sum + (item.price_cny_min + item.price_cny_max) / 2, 0,
+  )
+)
+
 const budgetItems = computed(() => {
   if (!dayPlans.value.length) return []
   const budget = itineraryBudget(dayPlans.value, trip.value?.travel_request)
-  const other = (itinerary.value?.total_budget_estimate_cny ?? budget.total) - budget.total
+  const total = itinerary.value?.total_budget_estimate_cny ?? budget.total
+  const other = total - budget.total - intercityTotal.value
   const items = [
     { label: '景点门票', value: budget.tickets },
     { label: '住宿', value: budget.hotels },
     { label: '餐饮', value: budget.meals },
-    { label: '交通', value: budget.transport },
+    { label: '城内交通', value: budget.transport },
   ]
+  if (intercityTotal.value > 0) {
+    items.push({ label: '城际交通（预估）', value: Math.round(intercityTotal.value * 100) / 100 })
+  }
   if (other > 0.005) items.push({ label: '其他预估费用', value: other })
   return items
 })
@@ -266,7 +276,8 @@ const budgetItems = computed(() => {
                   <div v-for="(t, i) in currentDay.transport" :key="i" class="transport-item">
                     <span>{{ t.from_location }} → {{ t.to_location }}</span>
                     <span>{{ t.type }}</span>
-                    <span>{{ t.departure_time }} - {{ t.arrival_time }}</span>
+                    <span v-if="t.duration_minutes">约 {{ t.duration_minutes }} 分钟</span>
+                    <span v-else-if="t.departure_time">{{ t.departure_time }} - {{ t.arrival_time }}</span>
                     <span>{{ formatPrice(t.price_cny) }}/人</span>
                   </div>
                 </div>
@@ -278,6 +289,25 @@ const budgetItems = computed(() => {
               </div>
             </el-tab-pane>
           </el-tabs>
+
+          <!-- Intercity estimates -->
+          <div v-if="itinerary?.intercity_estimates?.length" class="tips-section">
+            <h3>
+              城际交通
+              <el-tag size="small" type="info" effect="plain" style="margin-left:8px">预估</el-tag>
+            </h3>
+            <div
+              v-for="(item, i) in itinerary.intercity_estimates"
+              :key="i"
+              class="intercity-item"
+            >
+              <span>{{ item.from_location }} → {{ item.to_location }}</span>
+              <span>{{ item.type === 'flight' ? '航班' : '高铁' }}</span>
+              <span>约 {{ item.duration_hours_min }}–{{ item.duration_hours_max }} 小时</span>
+              <span>{{ formatPrice(item.price_cny_min) }}–{{ formatPrice(item.price_cny_max) }}</span>
+            </div>
+            <p class="intercity-note">价格为区间预估，不含具体班次，请自行比价确认。</p>
+          </div>
 
           <!-- Overall tips -->
           <div v-if="itinerary?.overall_tips" class="tips-section">
@@ -362,6 +392,13 @@ const budgetItems = computed(() => {
   display: flex; gap: 12px; align-items: center; padding: 6px 0;
   font-size: 13px; color: #606266;
 }
+
+/* Intercity estimates */
+.intercity-item {
+  display: flex; gap: 12px; align-items: center; padding: 6px 0;
+  font-size: 13px; color: #606266;
+}
+.intercity-note { font-size: 12px !important; color: #909399 !important; margin-top: 6px; }
 
 /* Notes */
 .day-notes { background: #fef0f0; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #f56c6c; margin-top: 12px; }

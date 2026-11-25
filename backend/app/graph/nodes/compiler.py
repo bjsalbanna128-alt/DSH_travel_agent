@@ -2,18 +2,18 @@
 
 import json
 import logging
-from collections import defaultdict
 from datetime import datetime
-from math import isfinite
 
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from langgraph.types import interrupt
-from pydantic import ValidationError
 
 from app.schemas.travel_state import (
-    AgentExecution, DayPlan, Itinerary, ApprovalRequest, TransportOption,
+    AgentExecution, DayPlan, Itinerary, ApprovalRequest,
 )
 from app.services.itinerary_costs import estimate_day_cost, traveler_count
+from app.services.transport_plan import (
+    build_intraday_transports, intercity_median_total, parse_intercity_estimates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,43 +53,15 @@ COMPILER_SYSTEM_PROMPT = """你是一个行程整合专家。将所有Agent的�
 只输出JSON。"""
 
 
-def _group_transport(plan: dict, days: int, destination: str) -> dict[int, list[TransportOption]]:
-    grouped = defaultdict(list)
-    if not isinstance(plan, dict) or days < 1:
-        return grouped
-
-    def add(day: int, leg: dict) -> None:
-        try:
-            option = TransportOption.model_validate(leg)
-        except ValidationError:
-            return
-        if option.type and isfinite(option.price_cny) and option.price_cny >= 0:
-            if option not in grouped[day]:
-                grouped[day].append(option)
-
-    intercity = plan.get("intercity")
-    for leg in intercity if isinstance(intercity, list) else []:
-        if not isinstance(leg, dict):
-            continue
-        day = leg.get("day")
-        if isinstance(day, str) and day.isascii() and day.isdecimal():
-            day = int(day)
-        if type(day) is not int or not 1 <= day <= days:
-            is_return = (
-                destination
-                and destination in str(leg.get("from_location") or "")
-                and destination not in str(leg.get("to_location") or "")
-            )
-            day = days if is_return else 1
-        if day > 0:
-            add(day, leg)
-    intraday = plan.get("intraday")
-    for day, legs in enumerate(intraday[:days] if isinstance(intraday, list) else [], start=1):
-        if isinstance(legs, list):
-            for leg in legs:
-                if isinstance(leg, dict):
-                    add(day, leg)
-    return grouped
+def _attach_intraday_transports(day_plans: list[DayPlan]) -> None:
+    """Build each day's legs from its own attraction order, in place."""
+    for plan in day_plans:
+        travel_mode = plan.route.travel_mode if plan.route else "walking"
+        plan.transport = build_intraday_transports(
+            [attraction.model_dump() for attraction in plan.attractions],
+            plan.hotel.model_dump() if plan.hotel else None,
+            travel_mode,
+        )
 
 
 async def itinerary_compiler_node(state: dict) -> dict:
@@ -102,7 +74,10 @@ async def itinerary_compiler_node(state: dict) -> dict:
     restaurants = state.get("restaurants", [])
     days = req.get("days", 0)
     destination = req.get("destination", "")
-    transport_by_day = _group_transport(state.get("transport") or {}, days, destination)
+    transport_state = state.get("transport")
+    intercity_estimates = parse_intercity_estimates(
+        transport_state.get("intercity") if isinstance(transport_state, dict) else None
+    )
 
     ctx = {
         "destination": destination,
@@ -112,10 +87,6 @@ async def itinerary_compiler_node(state: dict) -> dict:
         "routes": json.dumps(routes, ensure_ascii=False, indent=2),
         "hotels": json.dumps(hotels, ensure_ascii=False, indent=2),
         "restaurants": json.dumps(restaurants, ensure_ascii=False, indent=2),
-        "transport_by_day": {
-            day: [leg.model_dump(mode="json") for leg in legs]
-            for day, legs in transport_by_day.items()
-        },
     }
 
     user_prompt = json.dumps(ctx, ensure_ascii=False, indent=2)
@@ -189,23 +160,18 @@ async def itinerary_compiler_node(state: dict) -> dict:
                 lunch=lunch,
                 dinner=dinner,
                 hotel=hotel,
-                transport=transport_by_day.get(day_num, []),
+                transport=[],
                 notes=dp.get("notes", ""),
             ))
         except Exception as e:
             logger.warning(f"Invalid DayPlan day={day_num}, using minimal plan: {e}")
-            day_plans.append(DayPlan(
-                day=day_num, attractions=attrs, transport=transport_by_day.get(day_num, [])
-            ))
+            day_plans.append(DayPlan(day=day_num, attractions=attrs))
 
-    day_plans.extend(
-        DayPlan(day=day, transport=legs)
-        for day, legs in transport_by_day.items()
-        if day not in planned_days
-    )
     day_plans.sort(key=lambda plan: plan.day)
+    _attach_intraday_transports(day_plans)
     people = traveler_count(req)
     total_estimate = sum(estimate_day_cost(plan.model_dump(), people) for plan in day_plans)
+    total_estimate += intercity_median_total(intercity_estimates)
 
     # Build Itinerary
     itinerary = Itinerary(
@@ -214,6 +180,7 @@ async def itinerary_compiler_node(state: dict) -> dict:
         duration_days=days,
         total_budget_estimate_cny=round(total_estimate, 2),
         day_plans=day_plans,
+        intercity_estimates=intercity_estimates,
         overall_tips=data.get("overall_tips", ""),
         version=state.get("itinerary", {}).get("version", 0) + 1,
         created_at=datetime.now().isoformat(),

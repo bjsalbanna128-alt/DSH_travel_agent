@@ -5,12 +5,14 @@ import logging
 from datetime import datetime
 
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
-from app.schemas.travel_state import AgentExecution
+from app.schemas.travel_state import AgentExecution, IntercityEstimate
+from app.services.geo import haversine_km
 from app.services.poi_service import (
     search_attractions_hybrid,
     search_hotels_hybrid,
     search_restaurants_hybrid,
 )
+from app.services.transport_plan import parse_intercity_estimates
 
 logger = logging.getLogger(__name__)
 
@@ -123,18 +125,8 @@ import random
 
 
 def _haversine_km(a: dict, b: dict) -> float:
-    """Haversine distance in km between two attraction dicts with location.lat/lng."""
-    la1 = a.get("location", {}).get("lat", 0)
-    lo1 = a.get("location", {}).get("lng", 0)
-    la2 = b.get("location", {}).get("lat", 0)
-    lo2 = b.get("location", {}).get("lng", 0)
-    r = 6371.0
-    dlat = math.radians(la2 - la1)
-    dlon = math.radians(lo2 - lo1)
-    a_ = (math.sin(dlat / 2) ** 2 +
-          math.cos(math.radians(la1)) * math.cos(math.radians(la2)) *
-          math.sin(dlon / 2) ** 2)
-    return r * 2 * math.atan2(math.sqrt(a_), math.sqrt(1 - a_))
+    """Haversine distance in km, shared with transport planning."""
+    return haversine_km(a, b)
 
 
 def _kmeans_cluster(attractions: list[dict], k: int) -> list[list[dict]]:
@@ -593,21 +585,24 @@ async def restaurant_node(state: dict) -> dict:
 # Transport Agent
 # ═══════════════════════════════════════════════════════════════
 
-TRANSPORT_SYSTEM_PROMPT = """你是一个交通规划专家。规划城际和城内交通。
+TRANSPORT_SYSTEM_PROMPT = """你是交通规划顾问。只规划城际往返，给出预估区间，不列具体班次。
 
-每条价格为单人单段的预估价格。只列行程采用的交通段，不列相互替代的方案。
-城际段用 day 标注出行日期序号，去程通常为第 1 天，返程通常为最后一天。
-出发城市未知时保留空的 intercity。intraday 的下标按天排列，无安排的天使用空列表。
+## 规则
+- 每种方向同时给出高铁（train）与航班（flight）两种方式的耗时区间与票价区间
+- 两地距离过近、航班明显不适用时可只给高铁，但每种方向至少给出一种方式
+- 禁止输出具体发车/到达时刻、车次号、航班号
+- 价格与耗时按常见区间给预估，宁可区间宽一些，也不要给出看起来精确的错数
+- 用户未提供出发城市时不要编造，返回空的 intercity
 
 ## 输出格式
 {
   "intercity": [
-    {"day": 1, "type": "train", "from_location": "北京", "to_location": "成都", "departure_time": "08:00", "arrival_time": "15:00", "price_cny": 800, "booking_url": ""}
-  ],
-  "intraday": [
-    [
-      {"type": "metro", "from_location": "酒店", "to_location": "宽窄巷子", "departure_time": "09:00", "arrival_time": "09:30", "price_cny": 3}
-    ]
+    {"type": "train", "from_location": "北京", "to_location": "上海",
+     "duration_hours_min": 4.5, "duration_hours_max": 5.5,
+     "price_cny_min": 553, "price_cny_max": 662},
+    {"type": "flight", "from_location": "北京", "to_location": "上海",
+     "duration_hours_min": 2.0, "duration_hours_max": 2.5,
+     "price_cny_min": 700, "price_cny_max": 1200}
   ]
 }
 
@@ -631,29 +626,44 @@ def _normalize_transport(plan: object) -> dict[str, list]:
 
 
 async def transport_node(state: dict) -> dict:
-    """Plan transportation."""
-    llm = DeepSeekProvider(model=DeepSeekProvider.CHAT_MODEL)
+    """Estimate intercity transport ranges.
+
+    Intraday legs are not produced here: the compiler builds them from the
+    planned attraction order, so they always match what the itinerary shows.
+    """
     req = state.get("travel_request", {})
+    departure = str(req.get("departure_city") or "").strip()
+    destination = str(req.get("destination") or "").strip()
 
-    raw = await llm.chat(
-        system_prompt=TRANSPORT_SYSTEM_PROMPT,
-        user_prompt=(
-            f"出发城市：{req.get('departure_city', '未指定')}\n"
-            f"目的地：{req.get('destination')}\n"
-            f"天数：{req.get('days')}"
-        ),
-        temperature=0.3,
-        json_mode=True,
-    )
+    estimates: list[IntercityEstimate] = []
+    llm_calls = 0
 
-    data = safe_json_parse(raw, "transport")
+    if departure and destination and departure != destination:
+        llm = DeepSeekProvider(model=DeepSeekProvider.CHAT_MODEL)
+        raw = await llm.chat(
+            system_prompt=TRANSPORT_SYSTEM_PROMPT,
+            user_prompt=(
+                f"出发城市：{departure}\n"
+                f"目的地：{destination}\n"
+                f"天数：{req.get('days')}"
+            ),
+            temperature=0.3,
+            json_mode=True,
+        )
+        data = safe_json_parse(raw, "transport")
+        candidates = data.get("intercity") if isinstance(data, dict) else None
+        estimates = parse_intercity_estimates(candidates)
+        llm_calls = 1
+        summary = f"给出 {len(estimates)} 条城际预估"
+    else:
+        summary = "未提供出发城市，跳过城际预估"
 
     execution = AgentExecution(
         agent_name="transport_agent",
         started_at=datetime.now().isoformat(),
         completed_at=datetime.now().isoformat(),
-        output_summary="已检查城际和城内交通安排",
-        llm_calls=1,
+        output_summary=summary,
+        llm_calls=llm_calls,
         status="done",
     )
 
@@ -661,6 +671,9 @@ async def transport_node(state: dict) -> dict:
     history.append(execution.model_dump())
 
     return {
-        "transport": _normalize_transport(data),
+        "transport": _normalize_transport({
+            "intercity": [item.model_dump() for item in estimates],
+            "intraday": [],
+        }),
         "agent_history": history,
     }

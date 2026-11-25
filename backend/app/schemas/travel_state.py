@@ -164,12 +164,27 @@ class TransportOption(BaseModel):
     to_location: str = ""
     departure_time: str = ""
     arrival_time: str = ""
+    duration_minutes: int = 0  # estimated leg time; times are left empty by design
     price_cny: float = 0.0
     booking_url: str = ""
 
 
+class IntercityEstimate(BaseModel):
+    """Ranged estimate for an intercity leg. Never carries departure times."""
+
+    type: str = ""  # train | flight
+    from_location: str = ""
+    to_location: str = ""
+    duration_hours_min: float = 0.0
+    duration_hours_max: float = 0.0
+    price_cny_min: float = 0.0
+    price_cny_max: float = 0.0
+    is_estimate: bool = True
+    note: str = "预估区间，请自行比价"
+
+
 class TransportPlan(BaseModel):
-    intercity: list[TransportOption] = Field(default_factory=list)
+    intercity: list[IntercityEstimate] = Field(default_factory=list)
     intraday: list[list[TransportOption]] = Field(default_factory=list)
 
 
@@ -191,6 +206,7 @@ class Itinerary(BaseModel):
     duration_days: int = 0
     total_budget_estimate_cny: float = 0.0
     day_plans: list[DayPlan] = Field(default_factory=list)
+    intercity_estimates: list[IntercityEstimate] = Field(default_factory=list)
     overall_tips: str = ""
     version: int = 1
     created_at: str = ""
