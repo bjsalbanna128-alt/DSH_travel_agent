@@ -44,7 +44,7 @@ class Base(DeclarativeBase):
 async def init_db():
     """Create all tables."""
     # Ensure all models are imported so they register with Base.metadata
-    from app.db import membership_models, recommendation_models, scenic_models  # noqa: F401
+    from app.db import content_models, membership_models, recommendation_models, scenic_models  # noqa: F401
     from app.db.resource_models import check_existing_price_offers
     from app.db.stock_migration import ensure_stock_columns
     from app.db.template_models import ItineraryTemplate, ItineraryTemplateVersion  # noqa: F401

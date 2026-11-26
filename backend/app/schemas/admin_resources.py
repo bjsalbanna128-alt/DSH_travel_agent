@@ -87,11 +87,14 @@ class SupplierResponse(SupplierCreate):
 
 
 class PoiReference(ResourceBody):
-    source: Literal["amap", "chroma"]
+    source: Literal["amap", "chroma", "seed"]
     id: ShortName
     name: Name
     city: ShortName
     type: PoiKind
+    # 供内容层「按名称查坐标」使用；来源没有坐标时为空。
+    lat: float | None = None
+    lng: float | None = None
 
 
 class PoiSearchResponse(BaseModel):

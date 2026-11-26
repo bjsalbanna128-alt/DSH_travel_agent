@@ -128,26 +128,35 @@ async def search_attractions_hybrid(
     preferences: list[str] | None = None,
     days: int = 3,
     chroma_only: bool = False,
+    *,
+    travel_date=None,
+    anchor: dict | None = None,
+    session=None,
 ) -> list[dict[str, Any]]:
-    """Hybrid attraction search: ChromaDB semantic + Amap realtime."""
+    """Content layer (our sellable places) + Amap realtime.
+
+    Legacy seed collections are no longer read: a city without content simply
+    falls back to Amap.
+    """
     prefs = preferences or []
     query = f"{city} {' '.join(prefs)}"
     limit = days * 5  # more candidates for LLM curation
 
-    chroma_results: list[dict] = []
+    content_results: list[dict] = []
     try:
         store = get_chroma_store()
-        if store.collection_count("attractions") > 0:
-            chroma_results = [
-                {**item, "source": "chroma", "city": item.get("city") or city} if item.get("id") else item
-                for item in store.search_attractions(query, city=city, k=min(limit, 20))
+        if store.collection_count("contents_attractions") > 0:
+            content_results = [
+                {**item, "source": "content", "city": item.get("city") or city}
+                for item in store.search_contents("attraction", query, city=city, k=min(limit, 20))
+                if (item.get("city") or city) == city
             ]
-            logger.info(f"ChromaDB attractions: {len(chroma_results)} results")
+            logger.info(f"Content attractions: {len(content_results)} results")
     except Exception as e:
-        logger.warning(f"ChromaDB search failed (will use Amap only): {e}")
+        logger.warning(f"Content attraction search failed (will use Amap only): {e}")
 
     if chroma_only:
-        return chroma_results
+        return content_results
 
     amap_offset = min(limit, AMAP_MAX_OFFSET)
     if amap_offset < limit:
@@ -166,9 +175,17 @@ async def search_attractions_hybrid(
         for item in amap_results
     ]
 
-    merged = _merge_and_dedup(chroma_results, amap_results, prefer_chroma=True)
+    merged = _merge_and_dedup(content_results, amap_results, prefer_chroma=True)
     merged = _rerank(query, merged, top_k=limit)
-    logger.info(f"Hybrid attraction search: {len(chroma_results)} chroma + {len(amap_results)} amap → {len(merged)} re-ranked")
+    if session is not None:
+        from app.services.sellability import annotate_offers, sort_candidates
+
+        merged = await annotate_offers(session, merged, kind="attraction", travel_date=travel_date)
+        merged = sort_candidates(merged)
+    logger.info(
+        f"Hybrid attraction search: {len(content_results)} content + {len(amap_results)} amap "
+        f"→ {len(merged)} re-ranked"
+    )
     return merged
 
 
@@ -176,17 +193,23 @@ async def search_hotels_hybrid(
     city: str,
     max_price_per_night: float = 0,
     count: int = 10,
+    *,
+    travel_date=None,
+    anchor: dict | None = None,
+    session=None,
 ) -> list[dict[str, Any]]:
-    """Hybrid hotel search."""
-    chroma_results: list[dict] = []
+    """Content layer hotels + Amap realtime, sellable first and nearest to anchor."""
+    content_results: list[dict] = []
     try:
         store = get_chroma_store()
-        if store.collection_count("hotels") > 0:
-            chroma_results = store.search_hotels(
-                city + " 酒店", city=city, max_price=max_price_per_night, k=count,
-            )
+        if store.collection_count("contents_hotels") > 0:
+            content_results = [
+                {**item, "source": "content", "city": item.get("city") or city}
+                for item in store.search_contents("hotel", city + " 酒店", city=city, k=count)
+                if (item.get("city") or city) == city
+            ]
     except Exception as e:
-        logger.warning(f"ChromaDB hotel search failed: {e}")
+        logger.warning(f"Content hotel search failed: {e}")
 
     amap_results = await _search_amap_items(
         keywords=city + "酒店",
@@ -202,9 +225,23 @@ async def search_hotels_hybrid(
             if h.get("price_per_night_cny", 0) <= max_price_per_night
         ]
 
-    merged = _merge_and_dedup(chroma_results, amap_results, prefer_chroma=True)
+    merged = _merge_and_dedup(content_results, amap_results, prefer_chroma=True)
     merged = _rerank(city + " 酒店", merged, top_k=count)
-    logger.info(f"Hybrid hotel search: {len(chroma_results)} chroma + {len(amap_results)} amap → {len(merged)} re-ranked")
+    if session is not None:
+        from app.services.sellability import annotate_offers, sort_candidates
+
+        merged = await annotate_offers(session, merged, kind="hotel", travel_date=travel_date)
+        if max_price_per_night > 0:
+            merged = [
+                hotel for hotel in merged
+                if not (hotel.get("offer") or {}).get("sellable")
+                or hotel["offer"]["price_cny"] <= max_price_per_night
+            ]
+        merged = sort_candidates(merged, anchor=anchor)
+    logger.info(
+        f"Hybrid hotel search: {len(content_results)} content + {len(amap_results)} amap "
+        f"→ {len(merged)} re-ranked"
+    )
     return merged
 
 

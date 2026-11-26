@@ -2,8 +2,9 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 
+from app.db.database import async_session
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from app.schemas.travel_state import AgentExecution, IntercityEstimate
 from app.services.geo import haversine_km
@@ -17,6 +18,20 @@ from app.services.transport_plan import parse_intercity_estimates
 from app.services.scenic_restrictions import restriction_snapshot
 
 logger = logging.getLogger(__name__)
+
+
+def _travel_date(req: dict) -> date | None:
+    """Best-effort departure date so stock can be checked against a real day."""
+    raw = str(req.get("travel_time") or "").strip()
+    candidates = [raw[:10]]
+    if len(raw) >= 7:
+        candidates.append(f"{raw[:7]}-01")
+    for candidate in candidates:
+        try:
+            return date.fromisoformat(candidate)
+        except ValueError:
+            continue
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -66,12 +81,16 @@ async def attraction_node(state: dict) -> dict:
     target_count = days * 3
     restrictions = state.get("restriction_snapshot") or await restriction_snapshot(destination)
 
-    # Step 1: Hybrid search — ChromaDB semantic + Amap realtime
-    pois = await search_attractions_hybrid(
-        city=destination,
-        preferences=preferences,
-        days=days,
-    )
+    # Step 1: Content layer (our sellable places) + Amap realtime
+    travel_date = _travel_date(req)
+    async with async_session() as db:
+        pois = await search_attractions_hybrid(
+            city=destination,
+            preferences=preferences,
+            days=days,
+            travel_date=travel_date,
+            session=db,
+        )
     all_pois = pois
     pois = [poi for poi in all_pois if available_days(poi, req, restrictions)]
 
@@ -504,12 +523,20 @@ async def hotel_node(state: dict) -> dict:
     per_day_budget = req.get("budget", {}).get("per_day_cny", 0)
     hotel_budget = per_day_budget * 0.4 if per_day_budget > 0 else 500
 
-    # Fetch hotels from hybrid search (ChromaDB + Amap)
-    pois = await search_hotels_hybrid(
-        city=destination,
-        max_price_per_night=hotel_budget if hotel_budget > 0 else 0,
-        count=10,
+    # Fetch hotels from content layer + Amap, nearest to the first planned attraction
+    anchor = next(
+        (item.get("location") for item in state.get("attractions", []) if item.get("location")), None,
     )
+    travel_date = _travel_date(req)
+    async with async_session() as db:
+        pois = await search_hotels_hybrid(
+            city=destination,
+            max_price_per_night=hotel_budget if hotel_budget > 0 else 0,
+            count=10,
+            travel_date=travel_date,
+            anchor=anchor,
+            session=db,
+        )
 
     if not pois:
         logger.warning(f"No hotel results for {destination} (ChromaDB + Amap), falling back to LLM")

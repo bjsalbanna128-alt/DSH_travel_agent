@@ -13,7 +13,8 @@ from app.services.embeddings import get_embedding_provider
 
 logger = logging.getLogger(__name__)
 
-COLLECTIONS = ["attractions", "hotels", "restaurants", "trip_episodes"]
+COLLECTIONS = ["attractions", "hotels", "restaurants", "trip_episodes",
+               "contents_attractions", "contents_hotels"]
 
 _chroma_store_instance: Optional["ChromaStore"] = None
 
@@ -330,6 +331,80 @@ class ChromaStore:
         return items
 
     # ═══════════════════════════════════════════════════════════
+    # Content layer (place_contents)
+    # ═══════════════════════════════════════════════════════════
+
+    def _content_collection(self, kind: str):
+        return self._client.get_collection(
+            "contents_attractions" if kind == "attraction" else "contents_hotels"
+        )
+
+    def replace_content(self, kind: str, rows: list[dict]) -> int:
+        """Upsert content documents by content_id; rows carry their own document/metadata."""
+        collection = self._content_collection(kind)
+        if not rows:
+            return 0
+        ids = [row["id"] for row in rows]
+        # Remove first so re-publishing updates in place instead of duplicating.
+        collection.delete(ids=ids)
+        collection.add(
+            ids=ids,
+            documents=[row["document"] for row in rows],
+            metadatas=[row["metadata"] for row in rows],
+            embeddings=[self._embed.embed_query(row["document"]) for row in rows],
+        )
+        logger.info(f"Upserted {len(ids)} {kind} content documents")
+        return len(ids)
+
+    def delete_content_ids(self, kind: str, ids: list[str]) -> int:
+        if not ids:
+            return 0
+        collection = self._content_collection(kind)
+        collection.delete(ids=ids)
+        return len(ids)
+
+    def content_ids(self, kind: str) -> list[str]:
+        collection = self._content_collection(kind)
+        return list(collection.get(include=[]).get("ids") or [])
+
+    def search_contents(self, kind: str, query: str, city: str = "", k: int = 15) -> list[dict]:
+        collection = self._content_collection(kind)
+        if collection.count() == 0:
+            return []
+        where = {"city": city} if city else {}
+        results = collection.query(
+            query_embeddings=[self._embed.embed_query(query)],
+            n_results=min(k, collection.count()),
+            where=_metadata_where(where),
+        )
+        items: list[dict] = []
+        if not results["ids"] or not results["ids"][0]:
+            return items
+        for index, content_id in enumerate(results["ids"][0]):
+            meta = results["metadatas"][0][index] if results["metadatas"] else {}
+            distance = results["distances"][0][index] if results["distances"] else 1.0
+            items.append({
+                "id": content_id,
+                "content_id": content_id,
+                "source": "content",
+                "name": meta.get("name", ""),
+                "city": meta.get("city", ""),
+                "kind": meta.get("kind", kind),
+                "category": meta.get("category", ""),
+                "rating": meta.get("rating", 0),
+                "visit_duration_hours": meta.get("visit_duration", 0),
+                "ticket_price_cny": meta.get("ticket_price_hint", 0),
+                "opening_hours": meta.get("opening_hours", ""),
+                "landmark_hint": meta.get("landmark_hint", ""),
+                "location": {"lat": meta.get("lat", 0), "lng": meta.get("lng", 0)},
+                "tags": [tag for tag in str(meta.get("tags", "")).split(",") if tag],
+                "suitable_for": [who for who in str(meta.get("suitable_for", "")).split(",") if who],
+                "description": results["documents"][0][index] if results["documents"] else "",
+                "_chroma_score": 1.0 - distance,
+            })
+        return items
+
+    # ═══════════════════════════════════════════════════════════
     # Count / debug
     # ═══════════════════════════════════════════════════════════
 
@@ -348,7 +423,10 @@ class ChromaStore:
             where={"city": {"$in": [city_name, f"{city_name}市"]}}, include=["metadatas"],
         )
         return [
-            {"id": record_id, "name": meta["name"], "city": meta["city"]}
+            {
+                "id": record_id, "name": meta["name"], "city": meta["city"],
+                "location": {"lat": meta.get("lat", 0), "lng": meta.get("lng", 0)},
+            }
             for record_id, meta in zip(matches["ids"], matches["metadatas"] or [])
             if meta and keyword.casefold() in str(meta.get("name", "")).casefold()
         ][:25]

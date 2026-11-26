@@ -137,6 +137,11 @@ const router = createRouter({
           component: () => import('../views/AdminProductDetailPage.vue'),
         },
         {
+          path: 'contents',
+          name: 'admin-contents',
+          component: () => import('../views/AdminContentsPage.vue'),
+        },
+        {
           path: 'itinerary-templates',
           name: 'admin-itinerary-templates',
           component: () => import('../views/AdminItineraryTemplatesPage.vue'),

@@ -32,10 +32,15 @@ async def find_binding_candidates(city: str, keyword: str, kind: PoiKind) -> Poi
     candidates = {}
     for source, rows in (("chroma", seeds), ("amap", result.items)):
         for row in rows:
+            location = row.get("location") or {}
+            lat = location.get("lat")
+            lng = location.get("lng")
             try:
                 candidate = PoiReference(
                     source=source, id=row.get("id"), name=row.get("name"),
                     city=row.get("city") or city, type=kind,
+                    lat=float(lat) if lat else None,
+                    lng=float(lng) if lng else None,
                 )
             except ValidationError:
                 continue

@@ -70,6 +70,7 @@ onBeforeUnmount(() => request?.abort())
           </div>
           <div class="admin-nav-group" aria-label="行程与内容">
             <div class="admin-nav-label">行程与内容</div>
+            <router-link class="admin-nav-link" to="/admin/contents">景点与酒店</router-link>
             <router-link class="admin-nav-link" to="/admin/itinerary-templates">行程模板</router-link>
             <router-link class="admin-nav-link" to="/admin/recommendations">推荐内容</router-link>
             <router-link class="admin-nav-link" :to="{ name: 'admin-trips' }">行程查询</router-link>

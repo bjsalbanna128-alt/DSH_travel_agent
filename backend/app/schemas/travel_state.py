@@ -113,10 +113,21 @@ class Location(BaseModel):
     lng: float
 
 
+class Offer(BaseModel):
+    """Sellability attached to a place we can actually sell."""
+
+    product_id: str
+    price_cny: float
+    remaining: int | None = None
+    sellable: bool = False
+    date_unspecified: bool = False
+
+
 class Attraction(BaseModel):
     id: str = ""
     name: str
-    source: Literal["amap", "chroma"] | None = None
+    source: Literal["amap", "chroma", "content"] | None = None
+    content_id: str = ""
     city: str = ""
     category: str = ""  # natural | cultural | entertainment | shopping
     description: str = ""
@@ -128,6 +139,7 @@ class Attraction(BaseModel):
     tags: list[str] = Field(default_factory=list)
     suitable_for: list[str] = Field(default_factory=list)
     recommended_reason: str = ""
+    offer: Offer | None = None
 
 
 class Route(BaseModel):
@@ -149,6 +161,8 @@ class Hotel(BaseModel):
     amenities: list[str] = Field(default_factory=list)
     description: str = ""
     booking_url: str = ""
+    content_id: str = ""
+    offer: Offer | None = None
 
 
 class Restaurant(BaseModel):

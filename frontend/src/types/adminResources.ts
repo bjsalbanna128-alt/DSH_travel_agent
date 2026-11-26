@@ -26,11 +26,13 @@ export interface Supplier extends SupplierFields {
 }
 
 export interface PoiReference {
-  source: 'amap' | 'chroma'
+  source: 'amap' | 'chroma' | 'seed'
   id: string
   name: string
   city: string
   type: PoiKind
+  lat?: number | null
+  lng?: number | null
 }
 
 export type ProductAttributes =
@@ -109,7 +111,9 @@ export const poiTypes: Record<ProductType, PoiKind> = {
   hotel_room: 'hotel', attraction_ticket: 'attraction', vehicle: 'service_point',
 }
 
-export const poiSourceLabels: Record<PoiReference['source'], string> = { amap: '高德', chroma: '本地种子' }
+export const poiSourceLabels: Record<PoiReference['source'], string> = {
+  amap: '高德', chroma: '本地种子', seed: '自建种子',
+}
 
 export const offerReasons: Record<UnavailableReason, string> = {
   supplier_inactive: '供应商停用', product_off_shelf: '商品下架',

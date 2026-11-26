@@ -47,8 +47,11 @@ export async function readApiError(res: Response): Promise<AdminRequestError> {
   const validation: ApiFieldIssue[] = Array.isArray(detail)
     ? detail.map(item => ({ path: item.loc ?? [], message: item.msg })) : []
   const message = typeof detail === 'string' ? detail
-    : typeof detail?.message === 'string' ? detail.message
-    : validation.length ? validation.map(issue => `${issue.path.at(-1)}：${issue.message}`).join('；')
+    : typeof detail?.message === 'string'
+      ? detail.message + (Array.isArray(detail.missing) && detail.missing.length
+        && !detail.missing.every((label: string) => detail.message.includes(label))
+        ? `（${detail.missing.join('、')}）` : '')
+      : validation.length ? validation.map(issue => `${issue.path.at(-1)}：${issue.message}`).join('；')
     : `请求失败（${res.status}），请重试。`
   return new AdminRequestError(
     message, Array.isArray(detail?.dates) ? detail.dates : [],

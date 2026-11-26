@@ -96,6 +96,11 @@ def _explicit(query, next_field):
     days = re.search(rf"({NUMBER})\s*(?:天|日游)", query)
     if days and (amount := _number(days[1])) and amount > 0:
         result["days"] = amount
+    # 当上一句问的是「玩几天」时，用户可以只回一个数字（"1"、"三天"）。
+    if next_field == "days" and "days" not in result:
+        bare = re.fullmatch(rf"\s*({NUMBER})\s*(?:天|日)?\s*[。！!]?\s*", query)
+        if bare and (amount := _number(bare[1])) and amount > 0:
+            result["days"] = amount
     for found in re.finditer("|".join(PACE_TERMS), query, re.IGNORECASE):
         if not re.search(r"(?:不(?:想|要)?|别)(?:太)?$", query[:found.start()]):
             result["pace"] = PACE_TERMS[found[0].lower()]

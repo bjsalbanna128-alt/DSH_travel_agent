@@ -52,7 +52,7 @@ def trip_day(request, day):
 
 
 def _identity(item):
-    return (item["source"], item["id"]) if item.get("source") in ("amap", "chroma") and item.get("id") else None
+    return (item["source"], item["id"]) if item.get("source") in ("amap", "chroma", "content") and item.get("id") else None
 
 
 def with_poi_identity(item, known):
@@ -71,6 +71,10 @@ def with_poi_identity(item, known):
     if len(identities) == 1:
         identity, candidate = next(iter(identities.items()))
         clean.update(source=identity[0], id=identity[1], city=candidate.get("city") or "")
+        # Carry the sellability we resolved for this place; the LLM never invents it.
+        for extra in ("content_id", "offer"):
+            if candidate.get(extra):
+                clean[extra] = candidate[extra]
     return clean
 
 
