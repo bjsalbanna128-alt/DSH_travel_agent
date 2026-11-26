@@ -6,6 +6,7 @@ from datetime import datetime
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from app.schemas.travel_state import TravelRequest, AgentExecution
 from app.services.planning_quality import dates_in_text, explicit_departure
+from app.services.vehicle_routes import explicit_arrival
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ async def parse_request_node(state: dict) -> dict:
             special_requirements=req_data.get("special_requirements", []),
             departure_city=req_data.get("departure_city", ""),
             travel_time=req_data.get("travel_time", ""),
+            flight_arrival=req_data.get("flight_arrival"),
             pace=req_data.get("pace", "moderate"),
         )
         execution = AgentExecution(
@@ -171,6 +173,7 @@ async def parse_request_node(state: dict) -> dict:
         special_requirements=data.get("special_requirements", []),
         departure_city=data.get("departure_city", ""),
         travel_time=travel_time,
+        flight_arrival=explicit_arrival(user_input),
         pace=data.get("pace", "moderate"),
     )
 

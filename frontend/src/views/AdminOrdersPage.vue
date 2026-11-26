@@ -3,6 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminError } from '../api/adminResources'
 import { ordersApi } from '../api/orders'
+import OrderProductDetails from '../components/OrderProductDetails.vue'
 import { useAdminQuery } from '../composables/useAdminQuery'
 import {
   formatFen, fundStatusLabels, orderStatusLabels, orderTime,
@@ -176,7 +177,9 @@ onMounted(load)
                 @change="(marked: unknown) => stockouts = marked ? [...stockouts, row.id] : stockouts.filter(id => id !== row.id)" />
             </template>
           </el-table-column>
-          <el-table-column prop="product_name" label="商品" min-width="160" />
+          <el-table-column label="商品" min-width="230">
+            <template #default="{ row }"><OrderProductDetails :item="row" /></template>
+          </el-table-column>
           <el-table-column prop="service_date" label="服务日" width="110" />
           <el-table-column prop="quantity" label="数量" width="70" />
           <el-table-column label="金额" width="100">

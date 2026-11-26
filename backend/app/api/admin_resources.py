@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import func, select
 from app.api.deps import DbSession as DB, WriteDbSession as WriteDB
 from app.db.resource_models import Product, Supplier
@@ -25,6 +25,7 @@ from app.schemas.admin_resources import (
     ResourcePage,
     ServiceDate,
     SupplierCreate,
+    SupplierKind,
     SupplierPatch,
     SupplierResponse,
     SupplierStatus,
@@ -42,12 +43,15 @@ OfferPageSize = Annotated[int, Query(ge=1, le=MAX_OFFER_DAYS)]
 async def list_suppliers(
     db: DB, name: Annotated[str, Query(max_length=160)] = "",
     status: SupplierStatus | None = None, page: Page = 1, page_size: PageSize = 20,
+    kind: SupplierKind | None = None,
 ):
     filters = []
     if name.strip():
         filters.append(Supplier.name.icontains(name.strip(), autoescape=True))
     if status is not None:
         filters.append(Supplier.status == status)
+    if kind is not None:
+        filters.append(Supplier.kind == kind)
     total = await db.scalar(select(func.count()).select_from(Supplier).where(*filters))
     suppliers = await db.scalars(select(Supplier).where(*filters).order_by(
         Supplier.name, Supplier.id,
@@ -73,7 +77,16 @@ async def supplier_details(supplier_id: str, db: DB):
 @router.patch("/suppliers/{supplier_id}", response_model=SupplierResponse)
 async def update_supplier(supplier_id: str, data: SupplierPatch, db: WriteDB):
     supplier = await resources.get_supplier(db, supplier_id, lock=True)
-    for name, value in data.model_dump(exclude_unset=True).items():
+    changes = data.model_dump(exclude_unset=True)
+    from app.db.fleet_models import FleetModel
+    from app.services.scenic_restrictions import city_key
+
+    if supplier.kind == "vehicle_fleet" and (
+        changes.get("kind", supplier.kind) != supplier.kind
+        or (supplier.fleet_city and city_key(changes.get("fleet_city", supplier.fleet_city)) != city_key(supplier.fleet_city))
+    ) and await db.scalar(select(FleetModel.code).where(FleetModel.supplier_id == supplier_id).limit(1)):
+        raise HTTPException(409, "车队已有车型台账，不能变更供应商分类或服务城市。")
+    for name, value in changes.items():
         setattr(supplier, name, value)
     await db.flush()
     return supplier
@@ -121,7 +134,7 @@ async def product_details(product_id: str, db: DB):
 
 @router.patch("/products/{product_id}", response_model=ProductResponse)
 async def update_product(product_id: str, data: ProductPatch, db: WriteDB):
-    product = await resources.get_product(db, product_id, lock=True)
+    product = await resources.get_product(db, product_id, lock=True, new_supplier=data.supplier_id)
     return await resources.update_product(db, product, data)
 
 

@@ -6,7 +6,8 @@ import { adminError, AdminRequestError } from '../api/adminResources'
 import { checkoutApi } from '../api/checkout'
 import { ordersApi } from '../api/orders'
 import { useAdminQuery } from '../composables/useAdminQuery'
-import { formatFen, kindLabels, offerLabels, type CheckoutItem } from '../types/checkout'
+import VehicleCheckoutOptions from '../components/VehicleCheckoutOptions.vue'
+import { formatFen, kindLabels, offerLabels, vehicleLabels, type CheckoutItem, type VehicleOrderSelection } from '../types/checkout'
 
 const route = useRoute()
 const router = useRouter()
@@ -20,14 +21,29 @@ const submitting = ref(false)
 const conflict = ref<AdminRequestError>()
 const conflictNames = ref<Record<string, string>>({})
 const submitError = ref('')
+const vehicleItems = ref<VehicleOrderSelection[]>([])
+const vehicleBlocking = ref(false)
+const vehicleConflicts = computed(() => conflict.value?.conflicts ?? [])
 let intent: { payload: string; key: string } | undefined
 
 const selectedItems = computed(() => (data.value?.items ?? []).filter(item => item.sellable && quantity(item)))
-const total = computed(() => selectedItems.value.reduce((sum, item) => sum + (item.unit_price_fen ?? 0) * quantity(item), 0))
+const itemCount = computed(() => selectedItems.value.length + vehicleItems.value.length)
+const total = computed(() => selectedItems.value.reduce((sum, item) => sum + (item.unit_price_fen ?? 0) * quantity(item), 0)
+  + vehicleItems.value.reduce((sum, item) => sum + item.price_fen, 0))
 const staleSelection = computed(() => Object.keys(chosen).some(key => chosen[key] && !selectedItems.value.some(item => item.key === key))
   || selectedItems.value.some(item => quantity(item) > limit(item)))
 const canSubmit = computed(() => !loading.value && !error.value && !submitting.value && !staleSelection.value
-  && Boolean(data.value?.departure_date) && selectedItems.value.length > 0)
+  && Boolean(data.value?.departure_date) && !vehicleBlocking.value && itemCount.value > 0)
+
+function onVehicleChange(items: VehicleOrderSelection[], blocking: boolean) {
+  vehicleItems.value = items
+  vehicleBlocking.value = blocking
+}
+
+function conflictLabel(product?: string, service?: string) {
+  const offer = data.value?.vehicle_offers.find(item => item.service_key === service)
+  return (offer && vehicleLabels[offer.purpose]) || conflictNames.value[product ?? ''] || '所选项目'
+}
 
 function limit(item: CheckoutItem) { return Math.min(item.kind === 'hotel' ? 5 : 20, item.remaining ?? 0) }
 function quantity(item: CheckoutItem) { return chosen[item.key] ?? 0 }
@@ -74,7 +90,7 @@ async function submit() {
     const payload = {
       contact_name: contact.name.trim(), contact_phone: contact.phone.trim(),
       trip_id: tripId.value, departure_date: data.value?.departure_date,
-      travelers: filled, selected,
+      travelers: filled, selected: [...selected, ...vehicleItems.value.map(({ price_fen, ...item }) => item)],
     }
     const encoded = JSON.stringify(payload)
     if (intent?.payload !== encoded) intent = { payload: encoded, key: crypto.randomUUID() }
@@ -106,6 +122,8 @@ watch(departure, () => {
 }, { flush: 'sync' })
 watch(tripId, () => {
   clear()
+  onVehicleChange([], false)
+  conflict.value = undefined
   if (departure.value) departure.value = ''
   else void load()
 })
@@ -128,11 +146,11 @@ onMounted(load)
     <el-alert v-if="submitError" :title="submitError" type="warning" :closable="false" show-icon />
     <ul v-if="conflict" class="checkout-breakdown">
       <li v-for="(entry, index) in conflict.conflicts" :key="index">
-        {{ conflictNames[entry.product_id ?? ''] ?? '所选项目' }} {{ entry.service_date }} · {{ offerLabels[entry.reason] || '需重新确认' }}
+        {{ conflictLabel(entry.product_id, entry.service_key) }} {{ entry.service_date }} · {{ offerLabels[entry.reason] || '需重新确认' }}
       </li>
     </ul>
     <p v-if="!loading && data?.date_selectable && !data.departure_date">请选择出发日以查询价格和库存。</p>
-    <p v-else-if="!loading && data && !data.sellable_count">
+    <p v-else-if="!loading && data && !data.sellable_count && !data.vehicle_offers.length">
       {{ data.items.length ? '当前日期没有可订项目，请查看各项原因。' : '这份路书没有可预订的住宿或景点。' }}
     </p>
     <template v-if="data && !loading && !error">
@@ -158,6 +176,11 @@ onMounted(load)
           </div>
         </template>
       </section>
+    </template>
+    <VehicleCheckoutOptions :trip-id="tripId" :departure="data?.departure_date ?? null"
+      :offers="data?.vehicle_offers ?? []" :people="data?.travelers ?? 1"
+      :disabled="submitting || loading || !!error" :conflicts="vehicleConflicts" @change="onVehicleChange" />
+    <template v-if="data && !loading && !error">
       <section class="checkout-form">
         <h2>联系人与出行人</h2>
         <div class="checkout-grid">
@@ -173,8 +196,9 @@ onMounted(load)
         <el-button text :disabled="travelers.length >= 20" @click="addTraveler">+ 添加出行人</el-button>
       </section>
       <footer class="checkout-footer">
-        <span>已选 {{ selectedItems.length }} 项，合计 <strong>{{ formatFen(total) }}</strong></span>
+        <span>已选 {{ itemCount }} 项，合计 <strong>{{ formatFen(total) }}</strong></span>
         <span v-if="staleSelection">请调整不可售项目或超出库存的数量。</span>
+        <span v-if="vehicleBlocking">请核对已选用车的报价，或取消勾选该项。</span>
         <el-button type="primary" :loading="submitting" :disabled="!canSubmit" @click="submit">确认报价并提交订单</el-button>
       </footer>
     </template>

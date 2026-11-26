@@ -4,7 +4,9 @@ import re
 from datetime import date, datetime
 from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictBool, model_serializer, model_validator
+
+from app.schemas.fleet import ModelCode, Purpose
 
 SupplierStatus = Literal["active", "inactive"]
 SupplierKind = Literal["hotel", "ticket", "vehicle_fleet", "other"]
@@ -14,7 +16,7 @@ PoiKind = Literal["hotel", "attraction", "service_point"]
 OfferStatus = Literal["available", "stopped"]
 UnavailableReason = Literal[
     "supplier_inactive", "product_off_shelf", "unquoted", "offer_stopped",
-    "unverified_stock", "sold_out",
+    "unverified_stock", "sold_out", "unverified_trip_price", "vehicle_configuration",
 ]
 Name = Annotated[str, Field(min_length=1, max_length=160)]
 ShortName = Annotated[str, Field(min_length=1, max_length=100)]
@@ -28,7 +30,7 @@ POI_TYPES_BY_PRODUCT: dict[ProductType, PoiKind] = {
     "hotel_room": "hotel", "attraction_ticket": "attraction", "vehicle": "service_point",
 }
 PRICE_UNITS: dict[ProductType, str] = {
-    "hotel_room": "间夜", "attraction_ticket": "张", "vehicle": "车天",
+    "hotel_room": "间夜", "attraction_ticket": "张", "vehicle": "趟",
 }
 
 
@@ -60,6 +62,7 @@ class SupplierCreate(ResourceBody):
     name: Name
     settlement_name: Name
     kind: SupplierKind = "other"
+    fleet_city: str = Field("", max_length=100)
     contact_name: str = Field("", max_length=100)
     contact_info: str = Field("", max_length=160)
     notes: str = Field("", max_length=4000)
@@ -70,6 +73,7 @@ class SupplierPatch(PartialResourceBody):
     name: Name | None = None
     settlement_name: Name | None = None
     kind: SupplierKind | None = None
+    fleet_city: str | None = Field(None, max_length=100)
     contact_name: str | None = Field(None, max_length=100)
     contact_info: str | None = Field(None, max_length=160)
     notes: str | None = Field(None, max_length=4000)
@@ -116,6 +120,9 @@ class TicketAttributes(ResourceBody):
 class VehicleAttributes(ResourceBody):
     vehicle_name: Name
     passenger_capacity: People
+    model_code: ModelCode | None = None
+    purpose: Purpose | None = None
+    luggage_capacity: int | None = Field(None, strict=True, ge=0, le=100)
 
 
 ProductAttributes = HotelAttributes | TicketAttributes | VehicleAttributes
@@ -170,6 +177,7 @@ class OfferValues(ResourceBody):
     status: OfferStatus
     # 总投放。为空表示库存未核实：历史报价仍可查看，但游客不能下单。
     total_quantity: Quantity | None = None
+    trip_priced: StrictBool = False
 
 
 class OfferCreate(OfferValues):
@@ -181,6 +189,7 @@ class OfferPatch(PartialResourceBody):
     sale_fen: MoneyFen | None = None
     status: OfferStatus | None = None
     total_quantity: Quantity | None = None
+    trip_priced: StrictBool | None = None
 
 
 class OfferBatch(OfferValues):
@@ -195,11 +204,19 @@ class OfferBatchResult(BaseModel):
 
 
 class OfferQuote(OfferValues):
+    trip_priced: StrictBool | None = None
     below_cost: bool
     reserved_quantity: int = 0
     confirmed_quantity: int = 0
     remaining: int | None = None
     stock_verified: bool = False
+
+    @model_serializer(mode="wrap")
+    def serialize_quote(self, handler):
+        result = handler(self)
+        if self.trip_priced is None:
+            result.pop("trip_priced", None)
+        return result
 
 
 class OfferDay(BaseModel):

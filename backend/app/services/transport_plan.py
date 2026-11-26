@@ -87,28 +87,21 @@ def _build_leg(origin: dict, destination: dict, mode: str) -> TransportOption | 
     )
 
 
+def intraday_pairs(attractions, start_hotel=None, end_hotel=None):
+    stops = [stop for stop in (_as_stop(item) for item in attractions or []) if stop]
+    start, end = _as_stop(start_hotel), _as_stop(end_hotel)
+    points = ([start] if start else []) + stops + ([end] if end else [])
+    return [(a, b) for a, b in zip(points, points[1:]) if a["name"] != b["name"]]
+
+
 def build_intraday_transports(attractions, hotel, travel_mode: str = "walking") -> list[TransportOption]:
     """Build one day's legs from the planned attraction order and hotel.
 
     Order: hotel → first attraction → … → last attraction → hotel. A day without
     hotel only links attractions; a day without attractions has no legs.
     """
-    stops = [stop for stop in (_as_stop(item) for item in attractions or []) if stop]
-    if not stops:
-        return []
-
     mode = (travel_mode or "walking").strip() or "walking"
-    hotel_stop = _as_stop(hotel) if hotel else None
-
-    pairs: list[tuple[dict, dict]] = []
-    if hotel_stop:
-        pairs.append((hotel_stop, stops[0]))
-    pairs.extend(zip(stops, stops[1:]))
-    if hotel_stop:
-        pairs.append((stops[-1], hotel_stop))
-
-    legs = [leg for leg in (_build_leg(a, b, mode) for a, b in pairs) if leg]
-    return legs
+    return [_build_leg(a, b, mode) for a, b in intraday_pairs(attractions, hotel, hotel)]
 
 
 def _valid_range(low: float, high: float) -> bool:

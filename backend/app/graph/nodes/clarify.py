@@ -9,6 +9,7 @@ from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from app.schemas.ai_dialog import INITIAL_DIALOG
 from app.services.ai_dialog import DialogError, reply, run_dialog
 from app.services.planning_quality import dates_in_text, explicit_departure
+from app.services.vehicle_routes import explicit_arrival
 
 TEXT_FIELDS = ("destination", "departure_city", "travel_time")
 LIST_FIELDS = ("preferences", "special_requirements")
@@ -104,6 +105,8 @@ def _explicit(query, next_field):
     for found in re.finditer("|".join(PACE_TERMS), query, re.IGNORECASE):
         if not re.search(r"(?:不(?:想|要)?|别)(?:太)?$", query[:found.start()]):
             result["pace"] = PACE_TERMS[found[0].lower()]
+    if arrival := explicit_arrival(query):
+        result["flight_arrival"] = arrival
     return result
 
 

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from app.api.admin_resources import router as resource_router
 from app.api.admin_trips import router as trip_router
+from app.api.fleet import router as fleet_router
 from app.api.ai_dialog import router as dialog_router
 from app.api.auth import AccountResponse
 from app.api.contents import router as content_router
@@ -32,6 +33,7 @@ async def dashboard(account: CurrentOperator, db: DbSession):
 
 
 router.include_router(resource_router)
+router.include_router(fleet_router)
 router.include_router(trip_router)
 router.include_router(content_router)
 router.include_router(template_router)

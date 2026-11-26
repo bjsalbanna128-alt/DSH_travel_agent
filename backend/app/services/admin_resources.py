@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.fleet_models import FleetModel
 from app.db.resource_models import Driver, PriceOffer, Product, Supplier, Vehicle
 from app.schemas.admin_resources import (
     MAX_OFFER_DAYS,
@@ -36,7 +37,7 @@ async def flush(db: AsyncSession, on_conflict: str) -> None:
 
 
 async def get_supplier(db: AsyncSession, supplier_id: str, *, lock: bool = False) -> Supplier:
-    supplier = await db.get(Supplier, supplier_id, with_for_update=lock)
+    supplier = await db.get(Supplier, supplier_id, with_for_update=lock, populate_existing=lock)
     if supplier is None:
         raise HTTPException(404, "供应商不存在")
     return supplier
@@ -51,6 +52,8 @@ async def delete_supplier(db: AsyncSession, supplier: Supplier) -> None:
         raise HTTPException(409, fleet_detail)
     if await db.scalar(select(Driver.id).where(Driver.supplier_id == supplier.id).limit(1)):
         raise HTTPException(409, fleet_detail)
+    if await db.scalar(select(FleetModel.code).where(FleetModel.supplier_id == supplier.id).limit(1)):
+        raise HTTPException(409, "该车队仍有车型，请先在车队台账处理车型后再删除。")
     await db.delete(supplier)
     await flush(db, detail)
 
@@ -76,10 +79,17 @@ def product_response(row) -> ProductResponse:
     )
 
 
-async def get_product(db: AsyncSession, product_id: str, *, lock: bool = False) -> Product:
-    product = await db.get(Product, product_id, with_for_update=lock)
+async def get_product(db: AsyncSession, product_id: str, *, lock: bool = False, new_supplier=None) -> Product:
+    owners = {}
+    if lock:
+        from app.services.fleet_capacity import lock_product_suppliers
+
+        owners = await lock_product_suppliers(db, [product_id], additional=[new_supplier] if new_supplier else [])
+    product = await db.get(Product, product_id, with_for_update=lock, populate_existing=lock)
     if product is None:
         raise HTTPException(404, "商品不存在")
+    if lock and product.supplier_id not in (owners.get(product.id), new_supplier):
+        raise HTTPException(409, "商品归属已变化，请刷新后重试。")
     return product
 
 
@@ -101,6 +111,16 @@ async def _validate_listing(
     if data.type != "vehicle" and data.poi is None:
         place = "酒店" if data.type == "hotel_room" else "景点"
         raise HTTPException(409, f"请先绑定{place} POI，再上架商品。")
+    if data.type == "vehicle":
+        from app.services.scenic_restrictions import city_key
+
+        attrs = data.attributes
+        if (supplier.kind != "vehicle_fleet" or city_key(supplier.fleet_city) != "北京"
+                or city_key(data.city) != "北京" or not attrs.model_code or not attrs.purpose
+                or attrs.luggage_capacity is None or attrs.passenger_capacity > 100):
+            raise HTTPException(422, "上架前请选择北京车队，填写车型编码、用途及人数和行李容量。")
+        if await db.get(FleetModel, (supplier.id, attrs.model_code)) is None:
+            raise HTTPException(422, "车型编码不属于该车队。")
 
 
 async def create_product(db: AsyncSession, data: ProductCreate) -> ProductResponse:
@@ -139,6 +159,11 @@ async def update_product(db: AsyncSession, product: Product, patch: ProductPatch
     except ValidationError as error:
         raise HTTPException(422, error.errors()[0]["msg"]) from error
 
+    if desired.type == product.type == "vehicle" and await _product_has_offers(db, product.id):
+        for field in ("model_code", "purpose"):
+            if (old := product.attributes.get(field)) and old != getattr(desired.attributes, field):
+                raise HTTPException(409, "已维护报价的车型编码和用途不能修改，请新建商品。")
+
     await _validate_listing(
         db, desired, check_supplier=supplier_changed or product.status != "on_shelf",
     )
@@ -164,16 +189,21 @@ def offer_days(start: date, end: date) -> list[date]:
 
 
 def offer_day(
-    product_status: str, supplier_status: str, day: date, offer: PriceOffer | None,
+    product_status: str, supplier_status: str, day: date, offer: PriceOffer | None, *,
+    vehicle=False, fleet_configured=True,
 ) -> OfferDay:
     reasons: list[UnavailableReason] = []
     if supplier_status != "active":
         reasons.append("supplier_inactive")
     if product_status != "on_shelf":
         reasons.append("product_off_shelf")
+    if not fleet_configured:
+        reasons.append("vehicle_configuration")
     if offer is None:
         reasons.append("unquoted")
     else:
+        if vehicle and not offer.trip_priced:
+            reasons.append("unverified_trip_price")
         if offer.status == "stopped":
             reasons.append("offer_stopped")
         if offer.total_quantity is None:
@@ -190,13 +220,26 @@ def offer_day(
         confirmed_quantity=offer.confirmed_quantity,
         remaining=offer.remaining_quantity,
         stock_verified=offer.stock_verified,
+        trip_priced=offer.trip_priced if vehicle else None,
     )
     return OfferDay(service_date=day, quote=quote, can_sell=not reasons, reasons=reasons)
 
 
+async def _offer_rules(db: AsyncSession, product: Product, supplier: Supplier) -> dict[str, bool]:
+    vehicle = product.type == "vehicle"
+    if not vehicle or product.status != "on_shelf" or supplier.status != "active":
+        return {"vehicle": vehicle}
+    from app.services.fleet_sales import product_config
+
+    code = (product.attributes or {}).get("model_code")
+    model = await db.get(FleetModel, (supplier.id, code)) if code else None
+    return {"vehicle": True, "fleet_configured": product_config(product, supplier, model) is not None}
+
+
 async def get_offer_day(db: AsyncSession, product: Product, offer: PriceOffer) -> OfferDay:
     supplier = await get_supplier(db, product.supplier_id)
-    return offer_day(product.status, supplier.status, offer.service_date, offer)
+    return offer_day(product.status, supplier.status, offer.service_date, offer,
+                     **await _offer_rules(db, product, supplier))
 
 
 async def list_offers(
@@ -215,6 +258,7 @@ async def list_offers(
             raise HTTPException(422, "请同时填写入住日与退房日，退房日须晚于入住日。")
         start, end = check_in, check_out - timedelta(days=1)
 
+    rules = await _offer_rules(db, product, supplier)
     statement = select(PriceOffer).where(PriceOffer.product_id == product.id)
     if start is not None:
         statement = statement.where(PriceOffer.service_date >= start)
@@ -224,7 +268,8 @@ async def list_offers(
     if start is not None and end is not None:
         days = offer_days(start, end)
         by_day = {row.service_date: row for row in (await db.scalars(statement)).all()}
-        entries = [offer_day(product.status, supplier.status, day, by_day.get(day)) for day in days]
+        entries = [offer_day(product.status, supplier.status, day, by_day.get(day), **rules)
+                   for day in days]
         stay = None
         if is_stay:
             no_gaps = len(by_day) == len(days)
@@ -244,7 +289,8 @@ async def list_offers(
     total = await db.scalar(select(func.count()).select_from(statement.subquery()))
     offers = (await db.scalars(statement.order_by(PriceOffer.service_date).offset(offset).limit(limit))).all()
     return OfferPage(
-        items=[offer_day(product.status, supplier.status, row.service_date, row) for row in offers],
+        items=[offer_day(product.status, supplier.status, row.service_date, row, **rules)
+               for row in offers],
         total=total or 0,
     )
 
@@ -280,6 +326,8 @@ def _date_conflict(days: list[date]) -> HTTPException:
 async def create_offer(db: AsyncSession, product: Product, data: OfferCreate) -> OfferDay:
     if await db.get(PriceOffer, (product.id, data.service_date)) is not None:
         raise _date_conflict([data.service_date])
+    if product.type == "vehicle" and data.status == "available" and not data.trip_priced:
+        raise HTTPException(422, "请核对并确认用车售价为元/趟。")
     offer = PriceOffer(product_id=product.id, **data.model_dump())
     db.add(offer)
     try:
@@ -292,6 +340,9 @@ async def create_offer(db: AsyncSession, product: Product, data: OfferCreate) ->
 async def update_offer(db: AsyncSession, product: Product, day: date, patch: OfferPatch) -> OfferDay:
     offer = await get_offer(db, product, day)
     values = patch.model_dump(exclude_unset=True)
+    if (product.type == "vehicle" and values.get("status") == "available"
+            and not values.get("trip_priced", offer.trip_priced)):
+        raise HTTPException(422, "请核对并确认用车售价为元/趟。")
     if "total_quantity" in values:
         _check_total(day, values["total_quantity"], offer.reserved_quantity + offer.confirmed_quantity)
     for name, value in values.items():
@@ -311,6 +362,8 @@ def _check_total(day: date, total: int | None, committed: int) -> None:
 
 
 async def batch_offers(db: AsyncSession, product: Product, data: OfferBatch) -> OfferBatchResult:
+    if product.type == "vehicle" and data.status == "available" and not data.trip_priced:
+        raise HTTPException(422, "请核对并确认用车售价为元/趟。")
     days = offer_days(data.start_date, data.end_date)
     existing = (await db.scalars(select(PriceOffer).where(
         PriceOffer.product_id == product.id,
@@ -331,5 +384,7 @@ async def batch_offers(db: AsyncSession, product: Product, data: OfferBatch) -> 
         offer.cost_fen = data.cost_fen
         offer.sale_fen = data.sale_fen
         offer.status = data.status
+        if product.type == "vehicle":
+            offer.trip_priced = data.trip_priced
     await flush(db, "报价已被修改，批量填价未写入。请刷新日期预览后重试。")
     return OfferBatchResult(created=len(days) - len(by_day), updated=len(by_day))

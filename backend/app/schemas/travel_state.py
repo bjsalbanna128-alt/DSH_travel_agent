@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal, Optional, TypedDict
 from langgraph.graph.message import add_messages
 from langchain_core.messages import BaseMessage
 from pydantic import BaseModel, Field
+from app.schemas.fleet import VehicleOffer
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -101,6 +102,7 @@ class TravelRequest(BaseModel):
     special_requirements: list[str] = Field(default_factory=list)
     departure_city: str = ""
     travel_time: str = ""  # "2026-08-01" or "春季"
+    flight_arrival: dict[str, str] | None = None
     pace: Literal["relaxed", "moderate", "intensive"] = "moderate"
 
 
@@ -217,6 +219,7 @@ class DayPlan(BaseModel):
     dinner: Restaurant | None = None
     hotel: Hotel | None = None
     transport: list[TransportOption] = Field(default_factory=list)
+    vehicle_offers: list[VehicleOffer] = Field(default_factory=list)
     notes: str = ""
 
 

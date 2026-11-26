@@ -5,13 +5,14 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.schemas.fleet import VehicleSelection
 from app.schemas.support import UtcTimestamp
 
 OrderStatus = Literal[
     "pending_payment", "paid_pending_review", "confirmed", "cancel_requested", "cancelled", "completed",
 ]
 FundStatus = Literal["unpaid", "processing", "paid", "refunding", "refunded", "refund_failed"]
-SelectedKind = Literal["hotel", "ticket"]
+SelectedKind = Literal["hotel", "ticket", "vehicle"]
 
 
 class OrderBody(BaseModel):
@@ -31,9 +32,18 @@ class SelectedItem(OrderBody):
     check_out: date | None = None
     quantity: Annotated[int, Field(ge=1, le=20, strict=True)]
     quotes: Annotated[list[DayQuote], Field(min_length=1, max_length=30)]
+    vehicle: VehicleSelection | None = None
 
     @model_validator(mode="after")
     def validate_dates_and_quantity(self):
+        if self.kind == "vehicle":
+            if (self.vehicle is None or not self.vehicle.start_time or self.quantity != 1 or not self.service_date
+                    or self.check_in is not None or self.check_out is not None or len(self.quotes) != 1
+                    or self.quotes[0].service_date != self.service_date):
+                raise ValueError("用车须选择服务日期、开始时间及一趟的报价")
+            return self
+        if self.vehicle is not None:
+            raise ValueError("房型和门票不能携带用车内容")
         if self.kind == "hotel":
             if (self.service_date is not None or self.check_in is None or self.check_out is None
                     or not 1 <= (self.check_out - self.check_in).days <= 30):

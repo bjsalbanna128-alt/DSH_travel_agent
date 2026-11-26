@@ -12,6 +12,7 @@ from app.core.exceptions import LLMCallError, ParseError
 from app.graph.nodes.agents import _estimate_travel, _route_distance
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from app.schemas.travel_state import Attraction, Hotel, Restaurant, Route, TransportOption
+from app.services.fleet_sales import decorate_day_plans
 from app.services.itinerary_costs import estimate_day_cost, traveler_count
 from app.services.notifications import enqueue_trip_confirmation, wake_delivery
 from app.services.planning_quality import annotate, assess, save_report, with_poi_identity
@@ -124,6 +125,8 @@ async def _revise_itinerary(trip: dict, feedback: str) -> dict:
     except (ParseError, ValueError, KeyError, TypeError) as exc:
         raise ReviewError(422, "未能应用这次调整，请明确要修改的日期和项目。需要全程重排时请新建规划。") from exc
 
+    day_plans = [dict(day) for day in day_plans]
+    await decorate_day_plans(day_plans, request, request.get("destination") or itinerary.get("destination", ""))
     return {
         **itinerary,
         "day_plans": day_plans,

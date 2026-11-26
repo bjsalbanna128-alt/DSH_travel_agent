@@ -45,10 +45,11 @@ async def init_db():
     """Create all tables."""
     # Ensure all models are imported so they register with Base.metadata
     from app.db import (
-        content_models, membership_models, order_models, recommendation_models, scenic_models,
+        content_models, fleet_models, membership_models, order_models, recommendation_models, scenic_models,
     )  # noqa: F401
     from app.db.resource_models import check_existing_price_offers
     from app.db.order_migration import ensure_order_traveler_ciphertext
+    from app.db.fleet_migration import ensure_fleet_columns
     from app.db.stock_migration import ensure_stock_columns
     from app.db.template_models import ItineraryTemplate, ItineraryTemplateVersion  # noqa: F401
     from app.db.trip_operator_migration import ensure_trip_operator_support
@@ -63,6 +64,7 @@ async def init_db():
         if conn.dialect.name == "sqlite":
             await conn.exec_driver_sql("BEGIN IMMEDIATE")
         await conn.run_sync(ensure_stock_columns)
+        await conn.run_sync(ensure_fleet_columns)
         await conn.run_sync(check_existing_price_offers)
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(ensure_user_role_column)

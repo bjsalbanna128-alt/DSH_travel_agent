@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useTravelStore } from '../stores/travel'
 import { decideTrip, getTrip } from '../api/travel'
 import { checkoutApi } from '../api/checkout'
-import { formatFen, offerLabels } from '../types/checkout'
+import { formatFen, offerLabels, vehicleLabels } from '../types/checkout'
 import { useAdminQuery } from '../composables/useAdminQuery'
 import MiniMap from '../components/MiniMap.vue'
 import { itineraryBudget } from '../itineraryBudget'
@@ -44,6 +44,9 @@ function offerLabel(kind: 'ticket' | 'hotel', name: string, day: number) {
 const currentDay = computed<DayPlan | null>(() =>
   dayPlans.value.find(d => d.day === activeDay.value) ?? null
 )
+const currentVehicleOffers = computed(() => offers.value
+  ? offers.value.vehicle_offers.filter(offer => offer.day === currentDay.value?.day)
+  : currentDay.value?.vehicle_offers ?? [])
 
 const isEmpty = computed(() =>
   !loading.value && (!itinerary.value || dayPlans.value.length === 0)
@@ -167,6 +170,7 @@ const budgetItems = computed(() => {
           <span v-if="offers?.sellable_count" class="trip-offer-summary">{{ offers.sellable_count }} 项可订 · 建议数量参考合计 {{ formatFen(offers.total_fen) }}</span>
           <span v-else-if="offers?.date_selectable" class="trip-offer-summary">可在加购页选出发日查询报价和库存。</span>
           <span v-else-if="offersError" class="trip-offer-summary">暂时无法核对报价，可继续查看路书。</span>
+          <span v-else-if="offers?.vehicle_offers.length" class="trip-offer-summary">可以在加购页核对用车时段和报价。</span>
           <span v-else-if="offers" class="trip-offer-summary">当前日期暂无可订项目，可查看各项目状态。</span>
           <div class="budget-amount">{{ formatPrice(itinerary?.total_budget_estimate_cny ?? 0) }}</div>
           <div class="budget-sub">预估总费用</div>
@@ -309,6 +313,19 @@ const budgetItems = computed(() => {
                 </div>
 
                 <!-- Notes -->
+                <div v-if="currentVehicleOffers.length" class="day-section">
+                  <h3>用车选项</h3>
+                  <div v-for="offer in currentVehicleOffers" :key="offer.service_key" class="vehicle-preview">
+                    <strong>{{ vehicleLabels[offer.purpose] }}</strong>
+                    <el-tag v-if="offer.recommended" size="small">{{ offer.purpose === 'charter' ? '推荐包车' : '乘机到达' }}</el-tag>
+                    <p v-if="offer.legs.length">{{ [offer.legs[0]?.origin, ...offer.legs.map(leg => leg.destination)].join(' → ') }}</p>
+                    <p v-else>{{ offer.pickup || '具体机场及航站楼待填写' }} → {{ offer.dropoff || '送达地点待填写' }}</p>
+                    <p>{{ offer.service_date || '出发日期待选' }} · {{ offer.suggested_start ? '建议 ' + offer.suggested_start + ' 开始' : '上车时间待填' }} · 预计 {{ offer.duration_minutes / 60 }} 小时</p>
+                    <p v-if="offer.models.length">候选 {{ offer.models.map(model => model.model_name + '（' + model.passenger_capacity + '人）').join('、') }} · 加购时核对报价</p>
+                    <p v-else>当前暂无候选车型</p>
+                  </div>
+                </div>
+
                 <div v-if="currentDay.notes" class="day-notes">
                   {{ currentDay.notes }}
                 </div>
@@ -367,6 +384,9 @@ const budgetItems = computed(() => {
 </template>
 
 <style scoped>
+.vehicle-preview { padding: 12px 0; border-bottom: 1px solid #ebeef5; }
+.vehicle-preview strong { margin-right: 8px; }
+.vehicle-preview p { margin: 6px 0 0; font-size: 13px; }
 .review-panel { margin-bottom: 20px; }
 .review-actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 .trip-detail { max-width: 1200px; margin: 0 auto; padding: 0 16px; }

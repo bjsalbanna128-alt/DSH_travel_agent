@@ -8,6 +8,7 @@ import {
   type PoiReference, type Product, type ProductFields, type ProductType,
 } from '../types/adminResources'
 import ResourceSupplierSelect from './ResourceSupplierSelect.vue'
+import { vehicleLabels, type VehiclePurpose } from '../types/checkout'
 
 const props = defineProps<{ product: Product | null; supplierId: string }>()
 const emit = defineEmits<{ close: []; saved: [] }>()
@@ -25,6 +26,9 @@ const form = reactive({
   audience: attrs && 'audience' in attrs ? attrs.audience : '',
   vehicleName: attrs && 'vehicle_name' in attrs ? attrs.vehicle_name : '',
   passengers: attrs && 'passenger_capacity' in attrs ? attrs.passenger_capacity : 4 as number | undefined,
+  modelCode: attrs && 'model_code' in attrs ? attrs.model_code ?? '' : '',
+  purpose: (attrs && 'purpose' in attrs ? attrs.purpose ?? '' : '') as VehiclePurpose | '',
+  luggage: attrs && 'luggage_capacity' in attrs ? attrs.luggage_capacity ?? undefined : 0 as number | undefined,
 })
 const poi = ref<PoiReference | null>(initial?.poi ?? null)
 const poiKeyword = ref('')
@@ -70,7 +74,8 @@ function productAttributes(): ProductFields['attributes'] {
     return { ticket_name: form.ticketName, audience: form.audience }
   }
   if (!form.vehicleName.trim() || !form.passengers) throw new Error('请填写车型名和可乘客数。')
-  return { vehicle_name: form.vehicleName, passenger_capacity: form.passengers }
+  return { vehicle_name: form.vehicleName, passenger_capacity: form.passengers,
+    model_code: form.modelCode || null, purpose: form.purpose || null, luggage_capacity: form.luggage ?? null }
 }
 
 async function save() {
@@ -130,10 +135,22 @@ async function save() {
         <template v-else>
           <el-form-item label="车型名" required><el-input v-model="form.vehicleName" maxlength="160" /></el-form-item>
           <el-form-item label="可乘客数" required><el-input-number v-model="form.passengers" :min="1" :precision="0" /></el-form-item>
+          <el-form-item label="车型编码">
+            <el-input v-model.trim="form.modelCode" maxlength="40" placeholder="在车队台账中登记"
+              :disabled="identityLocked && !!(attrs && 'model_code' in attrs && attrs.model_code)" />
+          </el-form-item>
+          <el-form-item label="用途">
+            <el-select v-model="form.purpose" aria-label="用途" placeholder="请选择"
+              :disabled="identityLocked && !!(attrs && 'purpose' in attrs && attrs.purpose)">
+              <el-option v-for="(label, value) in vehicleLabels" :key="value" :value="value" :label="label" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="行李容量"><el-input-number v-model="form.luggage" :min="0" :max="100" :precision="0" /></el-form-item>
+          <p class="resource-muted resource-form-wide">上架前请补齐车型编码、用途和行李容量，并核定每日报价的按趟售价。</p>
         </template>
       </div>
 
-      <section class="poi-picker" aria-label="POI 绑定">
+      <section v-if="form.type !== 'vehicle' || poi" class="poi-picker" aria-label="POI 绑定">
         <div class="resource-actions">
           <strong>POI 绑定</strong>
           <template v-if="poi">

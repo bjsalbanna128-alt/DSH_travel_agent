@@ -2,6 +2,8 @@
 // Travel Planner — TypeScript Type Definitions
 // ═══════════════════════════════════════════════════════
 
+import type { VehicleOffer } from './checkout'
+
 export interface TravelRequest {
   destination: string
   days: number
@@ -97,6 +99,7 @@ export interface TransportPlan {
 }
 
 export interface DayPlan {
+  vehicle_offers?: VehicleOffer[]
   day: number
   date: string
   attractions: Attraction[]

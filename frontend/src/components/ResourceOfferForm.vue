@@ -18,6 +18,7 @@ const form = reactive({
   sale: existing ? (existing.sale_fen / 100).toFixed(2) : '',
   total: existing?.total_quantity != null ? String(existing.total_quantity) : '',
   overwrite: false,
+  tripPriced: existing?.trip_priced ?? false,
 })
 const formError = ref('')
 const previewError = ref('')
@@ -74,6 +75,10 @@ async function save() {
     formError.value = '请填写服务日期。'
     return
   }
+  if (props.priceUnit === '趟' && form.status === 'available' && !form.tripPriced) {
+    formError.value = '请核定按趟售价后再将报价设为可售。'
+    return
+  }
   if (props.mode === 'batch' && (!preview.value || previewing.value || loadError.value)) {
     formError.value = '请先预览日期范围。'
     return
@@ -88,6 +93,7 @@ async function save() {
     const values = {
       cost_fen: cost.value, sale_fen: sale.value, status: form.status,
       total_quantity: totalQuantity.value,
+      ...(props.priceUnit === '趟' ? { trip_priced: form.tripPriced } : {}),
     }
     if (props.mode === 'batch') {
       const result = await adminResources.batchOffers(props.productId, {
@@ -153,6 +159,9 @@ async function save() {
           </el-select>
         </el-form-item>
         <el-form-item label="计价单位"><span>人民币元 / {{ priceUnit }}</span></el-form-item>
+        <el-form-item v-if="priceUnit === '趟'" class="resource-form-wide">
+          <el-checkbox v-model="form.tripPriced">确认本次填写的金额为每趟售价和成本</el-checkbox>
+        </el-form-item>
       </div>
     </el-form>
     <template #footer>

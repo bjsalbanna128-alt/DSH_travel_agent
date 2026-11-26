@@ -7,6 +7,7 @@ import { adminError, adminResources } from '../api/adminResources'
 import ResourceOfferForm from '../components/ResourceOfferForm.vue'
 import { useAdminQuery } from '../composables/useAdminQuery'
 import { offerReasons, poiSourceLabels, productLabels, type OfferDay, type OfferStatus } from '../types/adminResources'
+import { vehicleLabels } from '../types/checkout'
 
 const route = useRoute()
 const productId = computed(() => String(route.params.id))
@@ -30,7 +31,9 @@ const attributes = computed(() => {
     return [['房型名', value.room_name], ['可住人数', value.occupancy], ['早餐说明', value.breakfast]]
   }
   if ('ticket_name' in value) return [['票种名', value.ticket_name], ['适用人群', value.audience]]
-  return [['车型名', value.vehicle_name], ['可乘客数', value.passenger_capacity]]
+  return [['车型名', value.vehicle_name], ['可乘客数', value.passenger_capacity],
+    ['车型编码', value.model_code ?? '待补齐'], ['用途', value.purpose ? vehicleLabels[value.purpose] : '待补齐'],
+    ['行李容量', value.luggage_capacity ?? '待补齐']]
 })
 
 function search() {

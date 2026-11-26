@@ -136,9 +136,13 @@ def test_product_types_bindings_filters_and_delete_rules(api):
     ticket_url = product_url(ticket["id"])
     assert api.patch(ticket_url, json={"status": "on_shelf"}).status_code == 409
     assert api.patch(ticket_url, json={"poi": TICKET, "status": "on_shelf"}).json()["price_unit"] == "张"
-    vehicle = product(api, seller, "vehicle", name="车型", status="on_shelf")
-    assert vehicle["poi"] is None and vehicle["price_unit"] == "车天"
-    assert api.patch(product_url(vehicle["id"]), json={"attributes": {"vehicle_name": "七座车", "passenger_capacity": 7}}).json()[
+    fleet = supplier(api, "验收车队", kind="vehicle_fleet", fleet_city="北京")["id"]
+    model = api.post(f"{ADMIN}/fleet/models", params={"supplier_id": fleet}, json={"code": "business", "name": "商务车"})
+    assert model.status_code == 201, model.text
+    attrs = {**ATTRIBUTES["vehicle"], "model_code": "business", "purpose": "charter", "luggage_capacity": 4}
+    vehicle = product(api, fleet, "vehicle", name="车型", city="北京", status="on_shelf", attributes=attrs)
+    assert vehicle["poi"] is None and vehicle["price_unit"] == "趟"
+    assert api.patch(product_url(vehicle["id"]), json={"attributes": {**attrs, "vehicle_name": "七座车", "passenger_capacity": 7}}).json()[
         "attributes"
     ]["passenger_capacity"] == 7
     for kind, attributes in (("hotel_room", ATTRIBUTES["vehicle"]), ("vehicle", {"vehicle_name": "车", "passenger_capacity": 1.5})):
@@ -241,7 +245,7 @@ def test_quotes_units_count_zero_and_stay_availability(api):
 ])
 def test_quote_rejects_invalid_amounts_dates_and_status(api, overrides):
     row = product(api, supplier(api)["id"], "vehicle")
-    response = api.post(f"{product_url(row['id'])}/offers", json={**quote(), **overrides})
+    response = api.post(f"{product_url(row['id'])}/offers", json={**quote(), "trip_priced": True, **overrides})
     assert response.status_code == 422, response.text
 
 
@@ -276,7 +280,7 @@ def test_batch_conflict_rolls_back_all_and_explicit_overwrite_preserves_count(ap
     row = product(api, supplier(api)["id"], "vehicle")
     url = product_url(row["id"])
     offers = f"{url}/offers"
-    assert api.post(offers, json=quote(SECOND)).status_code == 201
+    assert api.post(offers, json={**quote(SECOND), "trip_priced": True}).status_code == 201
     data = {"start_date": FIRST, "end_date": THIRD, "cost_fen": 500, "sale_fen": 0, "status": "stopped"}
     conflict = api.post(f"{offers}/batch", json=data)
     assert conflict.status_code == 409 and conflict.json()["detail"]["dates"] == [SECOND]
@@ -332,7 +336,8 @@ def test_concurrent_quotes_and_delete_create_keep_integrity(api):
     seller = supplier(api)["id"]
     row = product(api, seller, "vehicle")
     offers = f"{product_url(row['id'])}/offers"
-    assert concurrent_requests(("POST", offers, quote()), ("POST", offers, quote())) == [201, 409]
+    trip_quote = {**quote(), "trip_priced": True}
+    assert concurrent_requests(("POST", offers, trip_quote), ("POST", offers, trip_quote)) == [201, 409]
     assert api.get(offers).json()["total"] == 1
 
     standalone = supplier(api, "待验证供应商")["id"]
@@ -346,7 +351,7 @@ def test_concurrent_quotes_and_delete_create_keep_integrity(api):
 
     empty = product(api, seller, "vehicle")["id"]
     url = product_url(empty)
-    assert concurrent_requests(("DELETE", url, None), ("POST", f"{url}/offers", quote())) in ([201, 409], [204, 404])
+    assert concurrent_requests(("DELETE", url, None), ("POST", f"{url}/offers", trip_quote)) in ([201, 409], [204, 404])
 
 
 def test_startup_upgrades_existing_database_without_changing_accounts_and_routes(resource_db):

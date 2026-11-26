@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminError } from '../api/adminResources'
 import { ordersApi } from '../api/orders'
+import OrderProductDetails from '../components/OrderProductDetails.vue'
 import { useAdminQuery } from '../composables/useAdminQuery'
 import {
   formatFen, fundStatusLabels, orderStatusLabels, orderTime,
@@ -192,7 +193,9 @@ onUnmounted(() => {
 
         <h3>项目</h3>
         <el-table :data="selected.items" size="small" row-key="id">
-          <el-table-column prop="product_name" label="商品" min-width="160" />
+          <el-table-column label="商品" min-width="230">
+            <template #default="{ row }"><OrderProductDetails :item="row" /></template>
+          </el-table-column>
           <el-table-column prop="service_date" label="服务日" width="110" />
           <el-table-column prop="quantity" label="数量" width="70" />
           <el-table-column label="金额" width="100">

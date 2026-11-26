@@ -13,6 +13,8 @@ from app.schemas.travel_state import (
     AgentExecution, DayPlan, Hotel, Itinerary, ApprovalRequest,
 )
 from app.services.itinerary_costs import estimate_day_cost, traveler_count
+from app.services.fleet_sales import decorate_day_plans
+from app.schemas.fleet import VehicleOffer
 from app.services.planning_quality import annotate, assess, explicit_departure, route_guidance, with_poi_identity
 from app.services.sellability import annotate_offers, reclaim_expired_holds
 from app.services.transport_plan import (
@@ -244,6 +246,10 @@ async def itinerary_compiler_node(state: dict) -> dict:
     _fill_missing_hotels(day_plans, state.get("hotels") or [])
     await _refresh_day_offers(day_plans, days)
     _attach_intraday_transports(day_plans)
+    vehicle_plans = [plan.model_dump(mode="json") for plan in day_plans]
+    await decorate_day_plans(vehicle_plans, req, destination)
+    for plan, updated in zip(day_plans, vehicle_plans):
+        plan.vehicle_offers = [VehicleOffer.model_validate(offer) for offer in updated.get("vehicle_offers", [])]
     people = traveler_count(req)
     total_estimate = sum(estimate_day_cost(plan.model_dump(), people) for plan in day_plans)
     total_estimate += intercity_median_total(intercity_estimates)

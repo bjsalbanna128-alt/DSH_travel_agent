@@ -213,9 +213,14 @@ async def options(db, trip, departure, today):
     for product, rows in hotels.items():
         items.extend(_item("hotel", product, segment, people) for segment in _stay_segments(rows))
     items.sort(key=lambda row: (row["kind"], row["days"][0]["day"], row["name"], row["key"]))
+    from app.services import fleet_sales
+
+    vehicle_offers = fleet_sales.trip_offers(trip, start)
+    await fleet_sales.attach_models(db, vehicle_offers, trip.destination)
     return {
         "trip_id": trip.id, "departure_date": start, "date_selectable": selectable, "today": today,
         "items": items, "travelers": people, "sellable_count": sum(item["sellable"] for item in items),
+        "vehicle_offers": vehicle_offers,
         "undated_count": sum(item["status"] == "needs_date" for item in items),
         "total_fen": sum(item["unit_price_fen"] * item["quantity"] for item in items if item["sellable"]),
     }

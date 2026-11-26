@@ -13,6 +13,7 @@ export interface SupplierFields {
   name: string
   settlement_name: string
   kind: SupplierKind
+  fleet_city?: string
   contact_name: string
   contact_info: string
   notes: string
@@ -38,7 +39,8 @@ export interface PoiReference {
 export type ProductAttributes =
   | { room_name: string; occupancy: number; breakfast: string }
   | { ticket_name: string; audience: string }
-  | { vehicle_name: string; passenger_capacity: number }
+  | { vehicle_name: string; passenger_capacity: number; model_code?: string | null;
+      purpose?: import('./checkout').VehiclePurpose | null; luggage_capacity?: number | null }
 
 export interface ProductFields {
   supplier_id: string
@@ -68,6 +70,7 @@ export interface OfferValues {
   sale_fen: number
   status: OfferStatus
   total_quantity: number | null
+  trip_priced?: boolean
 }
 
 export interface OfferQuote extends OfferValues {
@@ -80,7 +83,7 @@ export interface OfferQuote extends OfferValues {
 
 export type UnavailableReason =
   | 'supplier_inactive' | 'product_off_shelf' | 'unquoted' | 'offer_stopped'
-  | 'unverified_stock' | 'sold_out'
+  | 'unverified_stock' | 'sold_out' | 'unverified_trip_price' | 'vehicle_configuration'
 
 export interface OfferDay {
   service_date: string
@@ -119,4 +122,6 @@ export const offerReasons: Record<UnavailableReason, string> = {
   supplier_inactive: '供应商停用', product_off_shelf: '商品下架',
   unquoted: '未报价', offer_stopped: '当日停售',
   unverified_stock: '库存未核定', sold_out: '已售罄',
+  unverified_trip_price: '按趟售价未核定',
+  vehicle_configuration: '车队、车型或用途待补齐',
 }

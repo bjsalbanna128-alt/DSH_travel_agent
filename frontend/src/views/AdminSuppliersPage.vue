@@ -18,7 +18,7 @@ const saving = ref(false)
 const formError = ref('')
 const rowAction = ref('')
 const blank: SupplierFields = {
-  name: '', settlement_name: '', kind: 'other', contact_name: '', contact_info: '', notes: '',
+  name: '', settlement_name: '', kind: 'other', fleet_city: '', contact_name: '', contact_info: '', notes: '',
 }
 const form = reactive<SupplierFields>({ ...blank })
 const record = useAdminQuery(signal => adminResources.supplier(selectedId.value, signal))
@@ -43,6 +43,7 @@ function fillForm(supplier: Supplier) {
     name: supplier.name,
     settlement_name: supplier.settlement_name,
     kind: supplier.kind ?? 'other',
+    fleet_city: supplier.fleet_city ?? '',
     contact_name: supplier.contact_name,
     contact_info: supplier.contact_info,
     notes: supplier.notes,
@@ -218,6 +219,9 @@ onMounted(load)
             <el-select v-model="form.kind" aria-label="供应商类型">
               <el-option v-for="(label, value) in supplierKindLabels" :key="value" :label="label" :value="value" />
             </el-select>
+          </el-form-item>
+          <el-form-item v-if="form.kind === 'vehicle_fleet'" label="车队服务城市">
+            <el-input v-model="form.fleet_city" placeholder="填写北京以启用试点" maxlength="100" />
           </el-form-item>
           <el-form-item label="联系人"><el-input v-model="form.contact_name" maxlength="100" /></el-form-item>
           <el-form-item label="联系方式"><el-input v-model="form.contact_info" maxlength="160" /></el-form-item>

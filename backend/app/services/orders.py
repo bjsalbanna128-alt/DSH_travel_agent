@@ -20,7 +20,7 @@ from app.db.models import User
 from app.db.resource_models import OfferAllocation, PriceOffer, Product, Supplier
 from app.db.support_models import Ticket
 from app.config import settings
-from app.services import demo_points, stock
+from app.services import demo_points, fleet_capacity, fleet_sales, stock
 from app.services.member_privacy import MemberPrivacy, mask_number, normalize_document
 
 BEIJING = ZoneInfo("Asia/Shanghai")
@@ -105,35 +105,47 @@ def _expand_items(selected: list[dict]) -> list[dict]:
                 "service_date": _day(entry["service_date"]),
                 "quantity": quantity, "kind": "ticket",
             })
+        elif entry.get("kind") == "vehicle" and quantity == 1:
+            entries.append({
+                "product_id": entry["product_id"], "service_date": _day(entry["service_date"]),
+                "quantity": 1, "kind": "vehicle", "vehicle": entry["vehicle"],
+                "vehicle_token": entry["quotes"][0]["token"],
+            })
         else:
-            raise HTTPException(422, "门票数量须在 1 至 20 张，当前仅支持房型和门票。")
+            raise HTTPException(422, "门票须在 1 至 20 张，每项用车限一趟。")
     if not entries:
         raise HTTPException(422, "请至少选择一项商品。")
     if len({(row["product_id"], row["service_date"]) for row in entries}) != len(entries):
         raise HTTPException(422, "同一商品日期不能重复提交。")
+    services = [row["vehicle"]["service_key"] for row in entries if row["kind"] == "vehicle"]
+    if len(set(services)) != len(services):
+        raise HTTPException(422, "同一用车服务只能选择一个车型。")
     return entries
 
 
 async def _price_entries(db: AsyncSession, entries: list[dict], today: date) -> list[dict]:
     priced: list[dict] = []
     issues = []
+    owners = await fleet_capacity.lock_product_suppliers(db, {entry["product_id"] for entry in entries})
     products = {product_id: await db.get(Product, product_id, with_for_update=True, populate_existing=True)
                 for product_id in sorted({entry["product_id"] for entry in entries})}
-    suppliers = {supplier_id: await db.get(Supplier, supplier_id, with_for_update=True, populate_existing=True)
-                 for supplier_id in sorted({product.supplier_id for product in products.values() if product})}
     for entry in sorted(entries, key=lambda row: (row["product_id"], row["service_date"])):
         service_date = entry["service_date"]
         if service_date < today:
             raise HTTPException(422, "服务日不能早于今天。")
         product = products[entry["product_id"]]
-        if product and product.type != {"hotel": "hotel_room", "ticket": "attraction_ticket"}[entry["kind"]]:
+        if product and product.type != {"hotel": "hotel_room", "ticket": "attraction_ticket", "vehicle": "vehicle"}[entry["kind"]]:
             raise HTTPException(422, "所选品类与商品类型不一致。")
-        supplier = suppliers.get(product.supplier_id) if product else None
+        owner = owners.get(entry["product_id"])
+        supplier = await db.get(Supplier, owner) if product and product.supplier_id == owner else None
         offer = await db.get(PriceOffer, (product.id, service_date), with_for_update=True,
                              populate_existing=True) if product else None
         if not product or not supplier or not offer:
-            issues.append({"product_id": entry["product_id"], "service_date": service_date.isoformat(),
-                           "reason": "unquoted" if product and supplier else "product_unavailable"})
+            issue = {"product_id": entry["product_id"], "service_date": service_date.isoformat(),
+                     "reason": "unquoted" if product and supplier else "product_unavailable"}
+            if entry["kind"] == "vehicle":
+                issue["service_key"] = entry["vehicle"]["service_key"]
+            issues.append(issue)
             continue
         priced.append({**entry, "product": product, "supplier": supplier, "offer": offer})
     if issues:
@@ -168,7 +180,10 @@ async def create_order(
     if candidates[0] is None:
         raise HTTPException(422, "请选择出发日以查询价格和库存。")
     priced = await _price_entries(db, entries, today)
-    departure_date = validate_purchase(trip, candidates, selected, priced, today)
+    vehicle_rows = [row for row in priced if row["kind"] == "vehicle"]
+    departure_date = validate_purchase(trip, candidates, [row for row in selected if row["kind"] != "vehicle"],
+                                       [row for row in priced if row["kind"] != "vehicle"], today)
+    await fleet_sales.verify_purchase(db, trip, departure_date, vehicle_rows, clock)
 
     sequence = await _next_sequence(db, today)
     total_sale = sum(int(row["offer"].sale_fen) * row["quantity"] for row in priced)
@@ -187,10 +202,15 @@ async def create_order(
     items = {}
     for index, row in enumerate(priced):
         product, offer = row["product"], row["offer"]
+        attributes = dict(product.attributes or {})
+        if "stay" in row:
+            attributes["stay"] = row["stay"]
+        if "fleet_snapshot" in row:
+            attributes["fleet"] = row["fleet_snapshot"]
         item = OrderItem(
             order_id=order.id, product_id=product.id, supplier_id=product.supplier_id,
             product_name=product.name, product_type=product.type,
-            attributes={**(product.attributes or {}), **({"stay": row["stay"]} if "stay" in row else {})},
+            attributes=attributes,
             service_date=row["service_date"],
             quantity=row["quantity"], unit_sale_fen=offer.sale_fen,
             unit_cost_fen=offer.cost_fen,
@@ -225,7 +245,10 @@ async def create_order(
     except stock.StockUnavailable as error:
         raise HTTPException(409, error.detail()) from error
     for allocation in allocations:
-        allocation.order_item_id = items[(allocation.product_id, allocation.service_date)].id
+        item = items[(allocation.product_id, allocation.service_date)]
+        allocation.order_item_id = item.id
+        if "fleet" in item.attributes:
+            fleet_sales.reserve(db, order, item, item.attributes["fleet"])
 
     await _event(db, order, "created", from_status=None, after={"total_sale_fen": total_sale})
     await db.flush()
@@ -272,6 +295,7 @@ async def pay_order(
     if clock >= _as_utc(order.expires_at):
         await expire_order(db, order, clock)
         raise PaymentExpired()
+    await fleet_sales.verify_reserved(db, order.id)
     try:
         await stock.protect_paid(db, order.id, await _frozen_entries(db, order.id))
     except stock.StockUnavailable as error:
@@ -299,6 +323,7 @@ async def approve_order(
 ) -> None:
     if order.status != "paid_pending_review":
         raise HTTPException(409, {"message": "只有待复核的订单可以通过。", "status": order.status})
+    await fleet_sales.verify_reserved(db, order.id, confirm=True)
     try:
         await stock.confirm(db, order.id, expected=await _frozen_entries(db, order.id))
     except stock.StockUnavailable as error:
@@ -351,6 +376,7 @@ async def cancel_order(
     order.cancel_reason = reason
     order.version += 1
 
+    await fleet_sales.release(db, order.id)
     if from_status == "paid_pending_review" or was_paid:
         await stock.release_confirmed(db, order.id, now=clock)
     await stock.release(db, order.id, now=clock)
@@ -373,6 +399,7 @@ async def reject_order(
     if order.status != "paid_pending_review":
         raise HTTPException(409, {"message": "只有待复核的订单可以拒绝。", "status": order.status})
     clock = now or now_utc()
+    await fleet_sales.release(db, order.id)
     if category == "stockout":
         wanted = {(pid, day) for pid, day, _ in await _frozen_entries(db, order.id)}
         missing = {(row.product_id, row.service_date) for row in rejected_items}
@@ -450,6 +477,7 @@ async def resolve_cancel_request(
     order.status = "cancelled"
     order.cancelled_at = clock
     order.version += 1
+    await fleet_sales.release(db, order.id)
     await stock.release_confirmed(db, order.id, now=clock)
     refund = await _start_refund(db, order, reason=note or order.cancel_reason, now=clock)
     await _event(db, order, "cancelled", from_status="cancel_requested",
@@ -478,6 +506,7 @@ async def expire_order(db, order, clock):
     if (order.status != "pending_payment" or order.fund_status != "unpaid"
             or _as_utc(order.expires_at) > clock):
         return False
+    await fleet_sales.release(db, order.id)
     await stock.release(db, order.id, now=clock)
     order.status = "cancelled"
     order.cancelled_at = clock
@@ -497,6 +526,7 @@ async def expire_due(db: AsyncSession, *, now: datetime | None = None, user_id=N
         criteria.append(exists().where(OrderItem.order_id == Order.id, OrderItem.product_id.in_(product_ids)))
     expired = 0
     ready = (await db.scalars(select(Order).where(*criteria).order_by(Order.id).with_for_update())).all()
+    await fleet_capacity.lock_order_fleets(db, [row.id for row in ready])
     price_keys = (await db.execute(select(OfferAllocation.product_id, OfferAllocation.service_date).where(
         OfferAllocation.order_id.in_([row.id for row in ready]), OfferAllocation.state == "reserved",
     ).distinct().order_by(OfferAllocation.product_id, OfferAllocation.service_date))).all() if ready else []

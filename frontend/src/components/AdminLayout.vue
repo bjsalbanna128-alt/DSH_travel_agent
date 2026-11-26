@@ -66,6 +66,7 @@ onBeforeUnmount(() => request?.abort())
           <div class="admin-nav-group" aria-label="资源管理">
             <div class="admin-nav-label">资源管理</div>
             <router-link class="admin-nav-link" to="/admin/suppliers">供应商</router-link>
+            <router-link class="admin-nav-link" to="/admin/fleet">车队台账</router-link>
             <router-link class="admin-nav-link" to="/admin/products">商品</router-link>
             <router-link class="admin-nav-link" :to="{ name: 'admin-orders' }">订单复核</router-link>
           </div>

@@ -100,14 +100,20 @@ def reader(api, template, **kwargs):
 
 
 def resource(api):
-    supplier = api.post(f"{RESOURCE}/suppliers", json={"name": "测试旅行社", "settlement_name": "非读者结算主体"})
+    supplier = api.post(f"{RESOURCE}/suppliers", json={
+        "name": "测试旅行社", "settlement_name": "非读者结算主体", "kind": "vehicle_fleet", "fleet_city": "北京",
+    })
     assert supplier.status_code == 201
+    supplier_id = supplier.json()["id"]
+    model = api.post(f"{RESOURCE}/fleet/models", params={"supplier_id": supplier_id}, json={"code": "business", "name": "七座车"})
+    assert model.status_code == 201, model.text
     product = api.post(f"{RESOURCE}/products", json={
-        "name": "接机商务车", "supplier_id": supplier.json()["id"], "type": "vehicle", "city": "成都",
-        "status": "on_shelf", "attributes": {"vehicle_name": "七座车", "passenger_capacity": 6},
+        "name": "接机商务车", "supplier_id": supplier_id, "type": "vehicle", "city": "北京",
+        "status": "on_shelf", "attributes": {"vehicle_name": "七座车", "passenger_capacity": 6,
+                                            "model_code": "business", "luggage_capacity": 4, "purpose": "airport_transfer"},
     })
     assert product.status_code == 201
-    return supplier.json()["id"], product.json()["id"]
+    return supplier_id, product.json()["id"]
 
 
 def test_initial_draft_validation_reordering_and_first_publication(api):
