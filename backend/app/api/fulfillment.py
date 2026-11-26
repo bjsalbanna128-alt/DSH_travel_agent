@@ -78,6 +78,12 @@ async def list_tasks(
     return {"items": [_summary(task) for task in rows], "total": total}
 
 
+@router.get("/board")
+async def board(db: DB, day: date | None = None, days: int = 7):
+    """今日与未来 N 天的任务分布及异常清单。"""
+    return await fulfillment.board(db, day=day, days=max(1, min(days, 30)))
+
+
 @router.post("/generate/{order_id}")
 async def generate(order_id: str, db: WriteDB):
     """Idempotent task generation for one confirmed order."""

@@ -216,6 +216,11 @@ const router = createRouter({
           props: { operator: true },
         },
         {
+          path: 'fulfillment',
+          name: 'admin-fulfillment',
+          component: () => import('../views/AdminFulfillmentPage.vue'),
+        },
+        {
           path: 'orders',
           name: 'admin-orders',
           component: () => import('../views/AdminOrdersPage.vue'),
@@ -316,4 +321,5 @@ router.beforeEach(async (to) => {
 })
 
 export default router
+
 

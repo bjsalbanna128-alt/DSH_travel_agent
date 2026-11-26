@@ -644,6 +644,14 @@ def order_summary(order, paid_at, clock):
     }
 
 
+async def record_completion(db: AsyncSession, order: Order, *, operator_id: str | None = None,
+                            operator_name: str | None = None) -> None:
+    """Write the single completion event after the fulfillment guard passes."""
+    await _event(db, order, "completed", from_status="confirmed",
+                 actor_id=operator_id, actor_name=operator_name)
+    await db.flush()
+
+
 async def list_orders(
     db: AsyncSession, *, user_id: str | None, status: str | None, keyword: str,
     offset: int, limit: int,

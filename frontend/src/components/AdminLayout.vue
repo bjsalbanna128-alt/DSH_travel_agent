@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { operatorDeniedDestination } from '../router'
@@ -69,6 +69,7 @@ onBeforeUnmount(() => request?.abort())
             <router-link class="admin-nav-link" to="/admin/fleet">车队台账</router-link>
             <router-link class="admin-nav-link" to="/admin/products">商品</router-link>
             <router-link class="admin-nav-link" :to="{ name: 'admin-orders' }">订单复核</router-link>
+            <router-link class="admin-nav-link" :to="{ name: 'admin-fulfillment' }">履约任务</router-link>
           </div>
           <div class="admin-nav-group" aria-label="行程与内容">
             <div class="admin-nav-label">行程与内容</div>
@@ -137,3 +138,4 @@ onBeforeUnmount(() => request?.abort())
   .admin-main { padding: 20px 14px; }
 }
 </style>
+

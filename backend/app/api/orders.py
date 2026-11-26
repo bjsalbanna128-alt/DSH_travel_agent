@@ -1,4 +1,4 @@
-﻿"""Tourist checkout and the operator review queue."""
+"""Tourist checkout and the operator review queue."""
 
 from typing import Annotated
 
@@ -125,6 +125,27 @@ async def admin_order(order_id: str, db: DB):
 async def approve(order_id: str, data: ReviewDecision, operator: CurrentOperator, db: WriteDB):
     order = await orders.get_order(db, order_id, lock=True)
     await orders.approve_order(db, order, operator_id=operator.id, operator_name=operator.username, note=data.note)
+    # 复核通过即生成履约任务；order_item_id 唯一，重复调用不会重复生成。
+    await fulfillment.generate_for_order(db, order.id)
+    return await orders.order_detail(db, order)
+
+
+@admin_router.post("/{order_id}/complete", response_model=OrderDetail)
+async def complete_order(order_id: str, operator: CurrentOperator, db: WriteDB):
+    """完成订单：所有任务已结束，且至少一项实际完成。"""
+    order = await orders.get_order(db, order_id, lock=True)
+    if order.status != "confirmed":
+        raise HTTPException(409, {"message": "只有已确认的订单可以完成。", "status": order.status})
+    blockers = await fulfillment.order_completion_blockers(db, order.id)
+    if not blockers["ok"]:
+        raise HTTPException(409, {
+            "message": "仍有未完成的履约任务，或没有任何实际完成的任务。",
+            "total": blockers["total"], "completed": blockers["completed"],
+            "unfinished": [task.id for task in blockers["unfinished"]],
+        })
+    order.status = "completed"
+    order.version += 1
+    await orders.record_completion(db, order, operator_id=operator.id, operator_name=operator.username)
     return await orders.order_detail(db, order)
 
 
@@ -143,5 +164,11 @@ async def resolve_cancel(order_id: str, data: ResolveCancelRequest, operator: Cu
     if await orders.resolve_cancel_request(db, order, operator_id=operator.id, operator_name=operator.username,
                                           approve=data.approve, note=data.note, usage=data.usage):
         await orders.process_refunds(db, order_id=order.id)
+    if order.status == "cancelled":
+        # 正式取消后作废未完成任务；已完成与已作废的保留历史。
+        await fulfillment.void_tasks_for_order(
+            db, order.id, reason="订单取消", actor_id=operator.id, actor_name=operator.username,
+        )
     return await orders.order_detail(db, order)
+
 
