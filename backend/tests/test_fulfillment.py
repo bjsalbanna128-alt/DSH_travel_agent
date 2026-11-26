@@ -1,4 +1,4 @@
-﻿"""Dispatch: assignment guards, overlap conflicts, release and candidates.
+"""Dispatch: assignment guards, overlap conflicts, release and candidates.
 
 pytest 可收集；本机没有 pytest 时用 `python tests/test_fulfillment.py` 直接跑。
 """
@@ -6,7 +6,7 @@ pytest 可收集；本机没有 pytest 时用 `python tests/test_fulfillment.py`
 import asyncio
 import os
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from secrets import token_hex
 from uuid import uuid4
 
@@ -77,6 +77,32 @@ async def seed(sessions):
         return order.id
 
 
+async def ensure_allocations(sessions, order_id: str) -> None:
+    """销售侧会为每个用车项目冻结一条时段占用，履约派车必须落在这一行上。"""
+    from app.db.fleet_models import FleetAllocation
+
+    async with sessions.begin() as db:
+        items = (await db.scalars(select(OrderItem).where(
+            OrderItem.order_id == order_id, OrderItem.product_type == "vehicle"))).all()
+        have = set((await db.scalars(select(FleetAllocation.order_item_id).where(
+            FleetAllocation.order_id == order_id))).all())
+        tasks = {task.order_item_id: task for task in (await db.scalars(select(FulfillmentTask).where(
+            FulfillmentTask.order_id == order_id))).all()}
+        for item in items:
+            if item.id in have:
+                continue
+            task = tasks.get(item.id)
+            start_time = (task.start_time if task and task.start_time else "09:00")
+            hour, minute = (int(part) for part in start_time.split(":"))
+            starts = datetime.combine(DAY, time(hour, minute), tzinfo=timezone.utc)
+            db.add(FleetAllocation(
+                order_item_id=item.id, order_id=order_id, supplier_id=FLEET,
+                service_key=f"day-{item.id[:8]}", model_code="car5", starts_at=starts,
+                ends_at=starts + timedelta(minutes=(task.duration_minutes if task else 120) or 120),
+                passengers=2, luggage=1, state="confirmed",
+            ))
+
+
 async def make_tasks(sessions, order_id: str, count: int, start_time: str = "09:00"):
     async with sessions.begin() as db:
         await fulfillment.generate_for_order(db, order_id)
@@ -84,7 +110,9 @@ async def make_tasks(sessions, order_id: str, count: int, start_time: str = "09:
             FulfillmentTask.order_id == order_id))).all()
         for task in tasks:
             task.start_time = start_time
-        return [task.id for task in tasks]
+        ids = [task.id for task in tasks]
+    await ensure_allocations(sessions, order_id)
+    return ids
 
 
 async def new_day_trip(sessions, order_id: str, start_time: str):
@@ -103,7 +131,9 @@ async def new_day_trip(sessions, order_id: str, start_time: str):
             FulfillmentTask.start_time.is_(None),
         ))
         task.start_time = start_time
-        return task.id
+        task_id = task.id
+    await ensure_allocations(sessions, order_id)
+    return task_id
 
 
 async def assign(sessions, task_id, vehicle_id, driver_id):
@@ -244,6 +274,57 @@ async def check_candidates_exclude_busy(sessions, order_id):
     check("候选中保留空闲车辆", VEHICLE_B in vehicles, str(vehicles))
 
 
+async def check_global_capacity_protects_other_orders(sessions, order_id):
+    """另一笔已确认但尚未派工的用车占用，不能被本单抢走唯一合适的司机。"""
+    from app.db.fleet_models import FleetAllocation
+
+    task_id = (await make_tasks(sessions, order_id, 1, "09:00"))[0]
+    async with sessions.begin() as db:
+        other = Order(id=str(uuid4()), order_no=f"ZY{uuid4().hex[:10].upper()}", user_id="guest2",
+                      status="confirmed", fund_status="paid", contact_name="李四",
+                      contact_phone="13800000009", total_sale_fen=60000, total_cost_fen=40000,
+                      expires_at=datetime.now(timezone.utc) + timedelta(minutes=15))
+        db.add(other)
+        await db.flush()
+        item = OrderItem(id=str(uuid4()), order_id=other.id, product_id="p2", supplier_id=FLEET,
+                         product_name="7 座 · 包车", product_type="vehicle",
+                         attributes={"fleet": {"purpose": "charter"}}, service_date=DAY,
+                         quantity=1, unit_sale_fen=90000, unit_cost_fen=60000,
+                         subtotal_sale_fen=90000)
+        db.add(item)
+        await db.flush()
+        starts = datetime.combine(DAY, time(9, 0), tzinfo=timezone.utc)
+        db.add(FleetAllocation(
+            order_item_id=item.id, order_id=other.id, supplier_id=FLEET,
+            service_key=f"other-{item.id[:8]}", model_code="car7", starts_at=starts,
+            ends_at=starts + timedelta(minutes=600), passengers=5, luggage=3,
+            state="confirmed",
+        ))
+
+    # 7 座只有李师傅够资格；本次把李师傅固定给 5 座，会让那笔单派不出车。
+    async with sessions.begin() as db:
+        task = await db.get(FulfillmentTask, task_id)
+        try:
+            await fulfillment.assign_task(db, task, vehicle_id=VEHICLE_A, driver_id=DRIVER_B)
+        except Exception as error:
+            detail = getattr(error, "detail", {})
+            reason = detail.get("reason") if isinstance(detail, dict) else None
+            check("抢占唯一合适司机被拒", getattr(error, "status_code", 0) == 409
+                  and reason == "fleet_capacity", str(detail))
+        else:
+            check("抢占唯一合适司机被拒", False, "没有报错")
+
+    # 换成只具备 5 座资格的司机，两条单都能履约。
+    status = await assign(sessions, task_id, VEHICLE_A, DRIVER_A)
+    check("换人后可以指派", status == "ready", status)
+
+    async with sessions() as db:
+        allocation = await db.scalar(select(FleetAllocation).where(
+            FleetAllocation.order_item_id == (await db.get(FulfillmentTask, task_id)).order_item_id))
+        fixed = (allocation.vehicle_id, allocation.driver_id)
+    check("占用行写入固定人车", fixed == (VEHICLE_A, DRIVER_A), str(fixed))
+
+
 SCENARIOS = [
     (check_assign_marks_ready, True),
     (check_overlap_conflicts, True),
@@ -254,6 +335,7 @@ SCENARIOS = [
     (check_release_then_reassign, True),
     (check_vehicle_task_requires_assignment_to_start, True),
     (check_candidates_exclude_busy, True),
+    (check_global_capacity_protects_other_orders, True),
 ]
 
 
@@ -314,5 +396,6 @@ if __name__ == "__main__":
             failed += 0 if ok else 1
     print(f"\n合计 {passed + failed} 项，通过 {passed}，失败 {failed}")
     raise SystemExit(1 if failed else 0)
+
 
 

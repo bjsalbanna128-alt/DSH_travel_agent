@@ -238,11 +238,55 @@ async def _conflicts(db, *, vehicle_id, driver_id, window, task_id) -> list:
     return hits
 
 
+async def _allocation_for(db, task):
+    """销售侧为每个用车项目冻结的时段占用；派车必须落在这一行上。"""
+    from app.db.fleet_models import FleetAllocation
+    from app.services import fleet_capacity
+
+    return await db.scalar(select(FleetAllocation).where(
+        FleetAllocation.order_item_id == task.order_item_id,
+        FleetAllocation.state.in_(fleet_capacity.HELD),
+    ))
+
+
+async def _global_capacity_ok(db, task, vehicle_id: str, driver_id: str) -> tuple[bool, dict]:
+    """把本任务的需求替换为固定人车后，重算整条重叠链是否仍可履约。"""
+    from app.db.fleet_models import FleetAllocation
+    from app.db.order_models import Order
+    from app.services import fleet_capacity
+
+    allocation = await _allocation_for(db, task)
+    if allocation is None:
+        return False, {"message": "该用车项目缺少时段占用，请先核实销售侧占用。", "reason": "missing_allocation"}
+
+    # 与销售侧一致的加锁顺序：先订单，再车队；多车队按固定顺序。
+    await db.get(Order, task.order_id, with_for_update=True)
+    await fleet_capacity.lock_fleets(db, [allocation.supplier_id])
+
+    rows = await fleet_capacity.commitments(db, allocation.supplier_id)
+    demands = []
+    for row in rows:
+        demand = fleet_capacity.Demand.from_row(row)
+        if row.order_item_id == task.order_item_id:
+            demand = fleet_capacity.Demand(
+                demand.model_code, demand.starts_at, demand.ends_at, demand.passengers,
+                demand.luggage, vehicle_id, driver_id,
+            )
+        demands.append(demand)
+    vehicles, drivers = await fleet_capacity.roster(db, allocation.supplier_id)
+    if not fleet_capacity.fits(demands, vehicles, drivers):
+        return False, {
+            "message": "固定这组人车后，会影响其它已承诺用车的履约（可能占用了唯一的合适司机），请换人或换时段。",
+            "reason": "fleet_capacity",
+        }
+    return True, {"allocation": allocation}
+
+
 async def assign_task(db, task, *, vehicle_id: str, driver_id: str, actor_id=None,
                       actor_name=None, expected_version=None):
     from datetime import datetime, timezone
 
-    from app.db.resource_models import Driver, Supplier, Vehicle
+    from app.db.resource_models import Supplier, Vehicle, Driver
 
     _check_version(task, expected_version)
     if task.task_type not in ("vehicle_pickup", "vehicle_charter"):
@@ -261,8 +305,19 @@ async def assign_task(db, task, *, vehicle_id: str, driver_id: str, actor_id=Non
     supplier = await db.get(Supplier, vehicle.supplier_id)
     if supplier is None or supplier.status != "active":
         raise HTTPException(409, "车队已停用，不能指派。")
-    if driver.model_codes and vehicle.model_code and vehicle.model_code not in driver.model_codes:
+
+    allocation = await _allocation_for(db, task)
+    if allocation is not None:
+        if allocation.model_code and vehicle.model_code != allocation.model_code:
+            raise HTTPException(409, "车型与订单约定的车型不符。")
+        if vehicle.seats < allocation.passengers:
+            raise HTTPException(409, "座位数不足，不能承接该项目。")
+        if vehicle.luggage < allocation.luggage:
+            raise HTTPException(409, "行李容量不足，不能承接该项目。")
+    if driver.model_codes and allocation is not None and allocation.model_code \
+            and allocation.model_code not in driver.model_codes:
         raise HTTPException(409, "该司机不具备此车型资格。")
+
     hits = await _conflicts(db, vehicle_id=vehicle_id, driver_id=driver_id,
                             window=_window(task), task_id=task.id)
     if hits:
@@ -271,6 +326,14 @@ async def assign_task(db, task, *, vehicle_id: str, driver_id: str, actor_id=Non
             "conflicts": [{"task_id": hit.id, "service_date": hit.service_date,
                            "start_time": hit.start_time} for hit in hits],
         })
+
+    ok, detail = await _global_capacity_ok(db, task, vehicle_id, driver_id)
+    if not ok:
+        raise HTTPException(409, detail)
+    allocation = detail["allocation"]
+    allocation.vehicle_id = vehicle_id
+    allocation.driver_id = driver_id
+
     await db.execute(DispatchAssignment.__table__.update().where(
         DispatchAssignment.task_id == task.id, DispatchAssignment.released_at.is_(None),
     ).values(released_at=datetime.now(timezone.utc)))
@@ -295,6 +358,11 @@ async def release_assignment(db, task, *, actor_id=None, actor_name=None, expect
     if assignment is None:
         raise HTTPException(409, "该任务当前没有指派。")
     assignment.released_at = datetime.now(timezone.utc)
+    allocation = await _allocation_for(db, task)
+    if allocation is not None:
+        # 撤派只清空具体人车，保留本单已确认的时段占用。
+        allocation.vehicle_id = None
+        allocation.driver_id = None
     task.status = "pending"
     task.version += 1
     await _event(db, task, "released", from_status="ready", actor_id=actor_id, actor_name=actor_name)
@@ -346,7 +414,12 @@ async def order_completion_blockers(db, order_id: str) -> dict:
 
 
 async def board(db, *, day=None, days: int = 7) -> dict:
-    """今日、未来 N 天与异常清单。"""
+    """今日、未来 N 天与异常清单。
+
+    口径：`committed` 是销售已承诺的服务量（未作废的任务数）；`assigned` 与
+    `unassigned` 是其中的子集（已固定人车 / 待派），**不与 committed 相加**；
+    `in_progress` 是执行中的子集。
+    """
     from datetime import date as _date, timedelta
 
     today = day or _date.today()
@@ -355,26 +428,43 @@ async def board(db, *, day=None, days: int = 7) -> dict:
         FulfillmentTask.service_date >= today.isoformat(),
         FulfillmentTask.service_date < horizon.isoformat(),
     ))).all()
+    active = [task for task in rows if task.status != "cancelled"]
+    assigned_ids = set((await db.scalars(select(DispatchAssignment.task_id).where(
+        DispatchAssignment.released_at.is_(None),
+        DispatchAssignment.task_id.in_([task.id for task in active] or [""]),
+    ))).all())
+    vehicle_types = ("vehicle_pickup", "vehicle_charter")
+
     by_status: dict[str, int] = {}
     for task in rows:
         by_status[task.status] = by_status.get(task.status, 0) + 1
+
+    def _counts(tasks: list) -> dict:
+        assigned = sum(1 for task in tasks if task.id in assigned_ids)
+        unassigned = sum(1 for task in tasks
+                         if task.task_type in vehicle_types and task.id not in assigned_ids)
+        return {
+            "committed": len(tasks),
+            "assigned": assigned,
+            "unassigned": unassigned,
+            "in_progress": sum(1 for task in tasks if task.status == "in_progress"),
+            "ready": sum(1 for task in tasks if task.status == "ready"),
+            "pending": sum(1 for task in tasks if task.status == "pending"),
+        }
+
     per_day, exceptions = [], []
     for offset in range(max(1, days)):
         current = (today + timedelta(days=offset)).isoformat()
-        of_day = [task for task in rows if task.service_date == current]
-        per_day.append({
-            "date": current, "total": len(of_day),
-            "ready": sum(1 for t in of_day if t.status == "ready"),
-            "in_progress": sum(1 for t in of_day if t.status == "in_progress"),
-            "pending": sum(1 for t in of_day if t.status == "pending"),
-        })
+        of_day = [task for task in active if task.service_date == current]
+        per_day.append({"date": current, **_counts(of_day)})
     for task in rows:
         if task.status == "exception":
             exceptions.append({"id": task.id, "task_type": task.task_type,
                                "service_date": task.service_date,
                                "reason": task.exception_reason})
     return {"today": today.isoformat(), "by_status": by_status, "per_day": per_day,
-            "exceptions": exceptions, "total": len(rows)}
+            "exceptions": exceptions, "total": len(rows),
+            "note": "committed 为销售已承诺量；assigned 与 unassigned 是其中的子集，不可相加。"}
 
 
 async def task_detail(db, task_id: str) -> dict:

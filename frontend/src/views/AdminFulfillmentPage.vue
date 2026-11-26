@@ -169,9 +169,13 @@ onMounted(() => {
 
     <div v-else class="resource-panel">
       <p class="resource-muted">今日 {{ board.data.value?.today }}，未来 7 天共 {{ board.data.value?.total ?? 0 }} 个任务。</p>
+      <el-alert type="info" :closable="false" show-icon
+        title="「销售已承诺」是总口径；「已指派」「待派」是其中的子集，不要相加。" />
       <el-table :data="board.data.value?.per_day ?? []" row-key="date" size="small">
         <el-table-column prop="date" label="日期" width="120" />
-        <el-table-column prop="total" label="任务数" width="90" />
+        <el-table-column prop="committed" label="销售已承诺" width="110" />
+        <el-table-column prop="assigned" label="已指派" width="90" />
+        <el-table-column prop="unassigned" label="待派" width="90" />
         <el-table-column prop="pending" label="待处理" width="90" />
         <el-table-column prop="ready" label="已就绪" width="90" />
         <el-table-column prop="in_progress" label="进行中" width="90" />
@@ -268,4 +272,5 @@ onMounted(() => {
 <style scoped>
 .picker { width: 100%; margin-bottom: 10px; }
 </style>
+
 

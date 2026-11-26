@@ -1,4 +1,4 @@
-import { adminQueryString, adminRequest } from './adminResources'
+﻿import { adminQueryString, adminRequest } from './adminResources'
 
 export type TaskStatus = 'pending' | 'ready' | 'in_progress' | 'completed' | 'exception' | 'cancelled'
 export type TaskType = 'hotel_checkin' | 'ticket_entry' | 'vehicle_pickup' | 'vehicle_charter' | 'other'
@@ -57,12 +57,23 @@ export interface ResourceOption {
   license_type?: string
 }
 
+export interface BoardDay {
+  date: string
+  committed: number
+  assigned: number
+  unassigned: number
+  in_progress: number
+  ready: number
+  pending: number
+}
+
 export interface Board {
   today: string
   by_status: Record<string, number>
-  per_day: { date: string; total: number; ready: number; in_progress: number; pending: number }[]
+  per_day: BoardDay[]
   exceptions: { id: string; task_type: TaskType; service_date: string; reason: string }[]
   total: number
+  note?: string
 }
 
 type Query = Parameters<typeof adminQueryString>[0]
@@ -107,3 +118,4 @@ export const formatTime = (value: string | null | undefined) => {
     dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Shanghai',
   }).format(date)
 }
+
