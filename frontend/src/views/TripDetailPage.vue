@@ -145,6 +145,8 @@ const budgetItems = computed(() => {
           </div>
         </div>
         <div class="header-budget">
+          <el-button v-if="!isDraft" :to="{ name: 'checkout', params: { tripId: tripId } }" tag="router-link"
+            type="primary" plain>预订行程中的项目</el-button>
           <div class="budget-amount">{{ formatPrice(itinerary?.total_budget_estimate_cny ?? 0) }}</div>
           <div class="budget-sub">预估总费用</div>
           <el-button v-if="!isDraft" type="primary" plain size="small" style="margin-top:8px" @click="router.push(`/trip/${tripId}/edit`)">

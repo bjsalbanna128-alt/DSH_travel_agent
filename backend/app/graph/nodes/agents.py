@@ -1,4 +1,4 @@
-"""Specialized agent nodes: attraction, route, hotel, restaurant, transport."""
+﻿"""Specialized agent nodes: attraction, route, hotel, restaurant, transport."""
 
 import json
 import logging
@@ -92,6 +92,9 @@ async def attraction_node(state: dict) -> dict:
             session=db,
         )
     all_pois = pois
+    catalog_ok = any((poi.get("offer") or {}).get("sellable") for poi in all_pois)
+    if not catalog_ok:
+        logger.warning("No sellable catalog offers for %s (attractions)", destination)
     pois = [poi for poi in all_pois if available_days(poi, req, restrictions)]
 
     if not pois:
@@ -143,6 +146,7 @@ async def attraction_node(state: dict) -> dict:
         "agent_history": history,
         "restriction_snapshot": restrictions,
         "scenic_candidates_filtered": len(all_pois) > len(pois) or len(selected) > count,
+        "catalog_available": catalog_ok,
         "scenic_pois": [
             {key: poi[key] for key in ("source", "id", "name", "city") if key in poi}
             for poi in all_pois
@@ -492,6 +496,8 @@ HOTEL_CURATION_PROMPT = """你是一个酒店推荐专家。从真实POI数据�
 ## 约束
 - 酒店每晚价格 ≤ 日预算的40%
 - 优先选择评分高、位置便利的
+- 数据里 `offer.sellable = true` 的酒店是平台可代订的，**在同等条件下优先推荐**
+- 不要编造 `offer` 字段，也不要修改它
 - 考虑用户特殊需求
 
 ## 输出格式
@@ -557,12 +563,19 @@ async def hotel_node(state: dict) -> dict:
     )
 
     data = safe_json_parse(raw, "hotel")
+    # 可售信息由检索结果决定，不能让模型凭空写：按 POI 身份把 offer 接回来，
+    # 并把可代订的酒店排在前面（未指定酒店时优先推荐我们自己的货）。
+    hotels = [with_poi_identity(item, pois) for item in data.get("hotels", []) if isinstance(item, dict)]
+    hotels.sort(key=lambda hotel: 0 if (hotel.get("offer") or {}).get("sellable") else 1)
+    hotel_ok = any((hotel.get("offer") or {}).get("sellable") for hotel in hotels)
+    if not hotel_ok:
+        logger.warning("No sellable catalog offers for %s (hotels)", destination)
 
     execution = AgentExecution(
         agent_name="hotel_agent",
         started_at=datetime.now().isoformat(),
         completed_at=datetime.now().isoformat(),
-        output_summary=f"推荐了{len(data.get('hotels', []))}家酒店（ChromaDB+Amap: {len(pois)}条）",
+        output_summary=f"推荐了{len(hotels)}家酒店（ChromaDB+Amap: {len(pois)}条）",
         llm_calls=1,
         status="done",
     )
@@ -571,8 +584,9 @@ async def hotel_node(state: dict) -> dict:
     history.append(execution.model_dump())
 
     return {
-        "hotels": data.get("hotels", []),
+        "hotels": hotels,
         "agent_history": history,
+        "catalog_available": bool(state.get("catalog_available")) or hotel_ok,
     }
 
 
@@ -756,3 +770,5 @@ async def transport_node(state: dict) -> dict:
         }),
         "agent_history": history,
     }
+
+

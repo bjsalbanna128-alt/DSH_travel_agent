@@ -1,10 +1,10 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { aiOperation } from '../api/aiOperations'
 import { adminError } from '../api/adminResources'
 import type { ClarifyResponse } from '../api/travel'
 
-type Field = 'destination' | 'days' | 'budget_total' | 'pace'
+type Field = 'destination' | 'days' | 'travel_time' | 'budget_total' | 'pace'
 type Pace = 'relaxed' | 'moderate' | 'intensive'
 interface Config {
   introduction: string
@@ -24,7 +24,7 @@ interface Trial extends ClarifyResponse {
   collected: Record<string, unknown>
   continuation: string
 }
-const names: Record<Field, string> = { destination: '目的地', days: '天数', budget_total: '预算', pace: '节奏' }
+const names: Record<Field, string> = { destination: '目的地', days: '天数', travel_time: '出发日期', budget_total: '预算', pace: '节奏' }
 const paces = { relaxed: '轻松', moderate: '适中', intensive: '紧凑' }
 const snapshot = ref<Snapshot>()
 const config = ref<Config>()
@@ -168,3 +168,4 @@ onMounted(load)
 .trial-exchange { padding: 4px 12px; margin-bottom: 12px; background: #f3f6fb; white-space: pre-wrap; overflow-wrap: anywhere; }
 .el-alert { margin-bottom: 12px; }
 </style>
+

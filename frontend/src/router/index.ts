@@ -1,4 +1,4 @@
-import { ElMessage } from 'element-plus'
+﻿import { ElMessage } from 'element-plus'
 import { createRouter, createWebHistory, type RouteMeta } from 'vue-router'
 import { useAuthStore, type AuthRole } from '../stores/auth'
 
@@ -79,6 +79,12 @@ const router = createRouter({
       name: 'message-detail',
       meta: { area: 'c', sessionScoped: true },
       component: () => import('../views/InboxDetailPage.vue'),
+    },
+    {
+      path: '/checkout/:tripId',
+      name: 'checkout',
+      meta: { area: 'c', sessionScoped: true },
+      component: () => import('../views/CheckoutPage.vue'),
     },
     {
       path: '/orders',
@@ -305,3 +311,4 @@ router.beforeEach(async (to) => {
 })
 
 export default router
+

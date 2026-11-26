@@ -1,4 +1,4 @@
-"""FastAPI application entry point for AI Travel Planner Agent."""
+﻿"""FastAPI application entry point for AI Travel Planner Agent."""
 
 import os
 from pathlib import Path
@@ -19,6 +19,7 @@ from app.api.admin import router as admin_router
 from app.api.deps import require_operator
 from app.api.itinerary_templates import reader_router as template_reader_router
 from app.api.membership import tourist_router as membership_router
+from app.api.checkout import router as checkout_router
 from app.api.orders import tourist_router as order_router
 from app.api.recommendations import reader_router as recommendation_reader_router
 from app.api.routes import router as api_router
@@ -96,6 +97,7 @@ app.include_router(recommendation_reader_router, prefix="/api")
 app.include_router(support_router, prefix="/api")
 app.include_router(membership_router, prefix="/api")
 app.include_router(order_router, prefix="/api")
+app.include_router(checkout_router, prefix="/api")
 app.include_router(admin_router, prefix="/api", dependencies=[Depends(require_operator)])
 app.include_router(ws_router)
 
@@ -103,3 +105,4 @@ app.include_router(ws_router)
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "version": "0.1.0"}
+

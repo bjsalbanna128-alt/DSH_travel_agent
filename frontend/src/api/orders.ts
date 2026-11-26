@@ -17,6 +17,11 @@ function payload(method: 'POST', data: object, signal?: AbortSignal) {
 }
 
 export const ordersApi = {
+  create: (data: Record<string, unknown>, idempotencyKey: string) =>
+    tourist<OrderDetail>('', {
+      ...payload('POST', data),
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
+    }),
   mine: (params: Query, signal: AbortSignal) =>
     tourist<OrderPage>(`${adminQueryString(params)}`, { signal }),
   detail: (id: string, signal: AbortSignal) =>

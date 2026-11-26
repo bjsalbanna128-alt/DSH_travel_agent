@@ -8,7 +8,7 @@ from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from langgraph.types import interrupt
 
 from app.schemas.travel_state import (
-    AgentExecution, DayPlan, Itinerary, ApprovalRequest,
+    AgentExecution, DayPlan, Hotel, Itinerary, ApprovalRequest,
 )
 from app.services.itinerary_costs import estimate_day_cost, traveler_count
 from app.services.planning_quality import annotate, assess, route_guidance, with_poi_identity
@@ -52,6 +52,86 @@ COMPILER_SYSTEM_PROMPT = """你是一个行程整合专家。将所有Agent的�
 }
 
 只输出JSON。"""
+
+
+def _resolve_start_date(text: str):
+    """Best-effort departure date: ISO, YYYY-MM, or 'M月D日' (next occurrence)."""
+    import re
+    from datetime import date
+
+    raw = (text or "").strip()
+    for candidate in (raw[:10], f"{raw[:7]}-01"):
+        try:
+            return date.fromisoformat(candidate)
+        except ValueError:
+            continue
+    match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", raw)
+    if match:
+        today = date.today()
+        try:
+            resolved = date(today.year, int(match.group(1)), int(match.group(2)))
+        except ValueError:
+            return None
+        return resolved if resolved >= today else date(today.year + 1, resolved.month, resolved.day)
+    return None
+
+
+def _apply_day_dates(day_plans: list[DayPlan], travel_time: str) -> None:
+    """Fill each day's absolute date from the departure date plus its offset."""
+    from datetime import timedelta
+
+    start = _resolve_start_date(travel_time)
+
+    def _valid(value: str) -> bool:
+        from datetime import date as _date
+        try:
+            _date.fromisoformat(str(value)[:10])
+            return True
+        except ValueError:
+            return False
+
+    for plan in day_plans:
+        if _valid(plan.date):
+            continue
+        # 「Day 1」这类不是日期的值直接丢弃，避免下游按日期查价时拿到脏数据。
+        plan.date = (start + timedelta(days=max(0, plan.day - 1))).isoformat() if start else ""
+
+
+def _attach_hotel_offer(hotel, known: list) -> dict | None:
+    """酒店也按名称回填可售信息：LLM 逐日计划里的酒店是它自己复述的，不带 offer。"""
+    if not isinstance(hotel, dict):
+        return None
+    name = str(hotel.get("name") or "").strip()
+    if not name:
+        return hotel
+    for candidate in known:
+        if str(candidate.get("name") or "").strip() == name and candidate.get("offer"):
+            merged = dict(hotel)
+            for extra in ("id", "content_id", "offer", "area"):
+                if candidate.get(extra):
+                    merged[extra] = candidate[extra]
+            return merged
+    return hotel
+
+
+def _with_catalog_note(overall_tips: str, state: dict) -> str:
+    """本次没拿到可售库存时，在行程里说清楚，别让用户以为是我们的货。"""
+    if state.get("catalog_available", True):
+        return overall_tips
+    note = "本次行程未检索到可预订库存（商品检索异常或该城市暂无上架商品），行程内容仅供参考。"
+    return f"{note}\n{overall_tips}".strip()
+
+
+def _fill_missing_hotels(day_plans: list[DayPlan], hotels: list) -> None:
+    """Every night before the last day needs a hotel, even if the LLM skipped it."""
+    if not day_plans or not hotels:
+        return
+    fallback = next(
+        (hotel for hotel in hotels if (hotel.get("offer") or {}).get("sellable")), hotels[0],
+    )
+    for plan in day_plans[:-1]:
+        if plan.hotel is None:
+            plan.hotel = Hotel(**{k: v for k, v in fallback.items() if k in Hotel.model_fields})
 
 
 def _attach_intraday_transports(day_plans: list[DayPlan]) -> None:
@@ -125,7 +205,7 @@ async def itinerary_compiler_node(state: dict) -> dict:
                               "rating": 4.0, "ticket_price_cny": 0, "category": "cultural"})
             elif isinstance(a, dict):
                 attrs.append(with_poi_identity(a, pois))
-        attrs = [with_poi_identity(attr, pois) if "source" not in attr else attr for attr in attrs]
+        attrs = [with_poi_identity(attr, pois) for attr in attrs]
 
         # Sanitize route — LLM often outputs a string or dict missing "day" field
         route = dp.get("route")
@@ -154,7 +234,7 @@ async def itinerary_compiler_node(state: dict) -> dict:
 
         lunch = _sanitize_meal(dp.get("lunch"))
         dinner = _sanitize_meal(dp.get("dinner"))
-        hotel = dp.get("hotel") if isinstance(dp.get("hotel"), dict) else None
+        hotel = _attach_hotel_offer(dp.get("hotel"), state.get("hotels") or [])
 
         try:
             day_plans.append(DayPlan(
@@ -173,6 +253,8 @@ async def itinerary_compiler_node(state: dict) -> dict:
             day_plans.append(DayPlan(day=day_num, attractions=attrs))
 
     day_plans.sort(key=lambda plan: plan.day)
+    _apply_day_dates(day_plans, str(req.get("travel_time") or ""))
+    _fill_missing_hotels(day_plans, state.get("hotels") or [])
     _attach_intraday_transports(day_plans)
     people = traveler_count(req)
     total_estimate = sum(estimate_day_cost(plan.model_dump(), people) for plan in day_plans)
@@ -186,7 +268,7 @@ async def itinerary_compiler_node(state: dict) -> dict:
         total_budget_estimate_cny=round(total_estimate, 2),
         day_plans=day_plans,
         intercity_estimates=intercity_estimates,
-        overall_tips=data.get("overall_tips", ""),
+        overall_tips=_with_catalog_note(data.get("overall_tips", ""), state),
         version=state.get("itinerary", {}).get("version", 0) + 1,
         created_at=datetime.now().isoformat(),
     )
@@ -269,3 +351,6 @@ async def human_approval_node(state: dict) -> dict:
 
     interrupt(approval.model_dump())
     return {}
+
+
+

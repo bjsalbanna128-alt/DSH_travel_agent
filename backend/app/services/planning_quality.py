@@ -65,8 +65,14 @@ def with_poi_identity(item, known):
         by_id = [candidate for candidate in by_name if candidate.get("id") == item_id]
         if by_id:
             by_name = by_id
-        elif any(candidate.get("id") == item_id for candidate in known):
-            return clean
+        else:
+            same_id = [candidate for candidate in known if candidate.get("id") == item_id]
+            if same_id:
+                # 模型把 id 原样抄回来了：仍要把可售信息补上，不能直接返回。
+                for extra in ("source", "city", "content_id", "offer"):
+                    if same_id[0].get(extra):
+                        clean[extra] = same_id[0][extra]
+                return clean
     identities = {_identity(candidate): candidate for candidate in by_name if _identity(candidate)}
     if len(identities) == 1:
         identity, candidate = next(iter(identities.items()))
