@@ -1,4 +1,4 @@
-"""Tourist checkout and the operator review queue."""
+﻿"""Tourist checkout and the operator review queue."""
 
 from typing import Annotated
 
@@ -14,6 +14,7 @@ from app.schemas.orders import (
     RejectDecision, ResolveCancelRequest, ReviewDecision, SweepResult, TouristOrderDetail,
 )
 from app.services import orders
+from app.services import fulfillment
 
 class OrderInputRoute(APIRoute):
     def get_route_handler(self):
@@ -143,3 +144,4 @@ async def resolve_cancel(order_id: str, data: ResolveCancelRequest, operator: Cu
                                           approve=data.approve, note=data.note, usage=data.usage):
         await orders.process_refunds(db, order_id=order.id)
     return await orders.order_detail(db, order)
+

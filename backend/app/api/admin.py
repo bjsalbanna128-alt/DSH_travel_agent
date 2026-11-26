@@ -1,4 +1,4 @@
-"""Operator endpoints, protected as a group when mounted on the application."""
+﻿"""Operator endpoints, protected as a group when mounted on the application."""
 
 from fastapi import APIRouter, Depends
 
@@ -8,6 +8,7 @@ from app.api.fleet import router as fleet_router
 from app.api.ai_dialog import router as dialog_router
 from app.api.auth import AccountResponse
 from app.api.contents import router as content_router
+from app.api.fulfillment import router as fulfillment_router
 from app.api.deps import CurrentOperator, DbSession
 from app.api.itinerary_templates import admin_router as template_router
 from app.api.membership import admin_router as membership_router
@@ -41,6 +42,8 @@ router.include_router(recommendation_router)
 router.include_router(support_router)
 router.include_router(membership_router)
 router.include_router(order_admin_router)
+router.include_router(fulfillment_router)
 router.include_router(dialog_router)
 router.include_router(recommendation_delivery_router)
 router.include_router(scenic_quality_router)
+

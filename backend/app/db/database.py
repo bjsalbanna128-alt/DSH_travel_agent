@@ -44,7 +44,7 @@ class Base(DeclarativeBase):
 async def init_db():
     """Create all tables."""
     # Ensure all models are imported so they register with Base.metadata
-    from app.db import (
+    from app.db import (fulfillment_models, 
         content_models, fleet_models, membership_models, order_models, recommendation_models, scenic_models,
     )  # noqa: F401
     from app.db.resource_models import check_existing_price_offers
@@ -93,4 +93,5 @@ async def get_db() -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
+
 
