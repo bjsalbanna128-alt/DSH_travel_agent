@@ -187,6 +187,28 @@ async def release(db: AsyncSession, order_id: str, *, now: datetime | None = Non
     return len(allocations)
 
 
+async def release_confirmed(db: AsyncSession, order_id: str, *, now: datetime | None = None) -> int:
+    """Give back occupancy that was already confirmed (cancellation after review)."""
+    allocations = (await db.scalars(select(OfferAllocation).where(
+        OfferAllocation.order_id == order_id,
+        OfferAllocation.state == "confirmed",
+    ))).all()
+    for allocation in allocations:
+        result = await db.execute(
+            update(PriceOffer)
+            .where(
+                PriceOffer.product_id == allocation.product_id,
+                PriceOffer.service_date == allocation.service_date,
+                PriceOffer.confirmed_quantity >= allocation.quantity,
+            )
+            .values(confirmed_quantity=PriceOffer.confirmed_quantity - allocation.quantity)
+        )
+        if result.rowcount == 1:
+            allocation.state = "released"
+    await db.flush()
+    return len(allocations)
+
+
 async def expire_due(db: AsyncSession, *, now: datetime | None = None) -> int:
     """Release reservations whose payment window has passed."""
     clock = _now(now)

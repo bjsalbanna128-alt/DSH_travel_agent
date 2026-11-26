@@ -10,6 +10,7 @@ from app.api.contents import router as content_router
 from app.api.deps import CurrentOperator, DbSession
 from app.api.itinerary_templates import admin_router as template_router
 from app.api.membership import admin_router as membership_router
+from app.api.orders import admin_router as order_admin_router
 from app.api.recommendations import admin_router as recommendation_router
 from app.api.recommendation_delivery import router as recommendation_delivery_router
 from app.api.scenic_quality import router as scenic_quality_router
@@ -37,6 +38,7 @@ router.include_router(template_router)
 router.include_router(recommendation_router)
 router.include_router(support_router)
 router.include_router(membership_router)
+router.include_router(order_admin_router)
 router.include_router(dialog_router)
 router.include_router(recommendation_delivery_router)
 router.include_router(scenic_quality_router)

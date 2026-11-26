@@ -81,6 +81,12 @@ const router = createRouter({
       component: () => import('../views/InboxDetailPage.vue'),
     },
     {
+      path: '/orders',
+      name: 'orders',
+      meta: { area: 'c', sessionScoped: true },
+      component: () => import('../views/OrdersPage.vue'),
+    },
+    {
       path: '/tickets',
       name: 'my-tickets',
       meta: { area: 'c', sessionScoped: true },
@@ -197,6 +203,11 @@ const router = createRouter({
           name: 'admin-ticket-detail',
           component: () => import('../views/TicketDetailPage.vue'),
           props: { operator: true },
+        },
+        {
+          path: 'orders',
+          name: 'admin-orders',
+          component: () => import('../views/AdminOrdersPage.vue'),
         },
         {
           path: 'members',

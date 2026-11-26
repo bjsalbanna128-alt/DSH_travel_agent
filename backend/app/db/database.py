@@ -1,4 +1,4 @@
-"""Async database engine and session management (SQLite)."""
+﻿"""Async database engine and session management (SQLite)."""
 
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -44,8 +44,11 @@ class Base(DeclarativeBase):
 async def init_db():
     """Create all tables."""
     # Ensure all models are imported so they register with Base.metadata
-    from app.db import content_models, membership_models, recommendation_models, scenic_models  # noqa: F401
+    from app.db import (
+        content_models, membership_models, order_models, recommendation_models, scenic_models,
+    )  # noqa: F401
     from app.db.resource_models import check_existing_price_offers
+    from app.db.order_migration import ensure_order_traveler_ciphertext
     from app.db.stock_migration import ensure_stock_columns
     from app.db.template_models import ItineraryTemplate, ItineraryTemplateVersion  # noqa: F401
     from app.db.trip_operator_migration import ensure_trip_operator_support
@@ -64,6 +67,7 @@ async def init_db():
         await conn.run_sync(ensure_user_role_column)
         await conn.run_sync(ensure_trip_version_index)
         await conn.run_sync(ensure_trip_operator_support)
+        await conn.run_sync(ensure_order_traveler_ciphertext)
         await seed_message_settings(conn)
         await seed_dialog(conn)
         await seed_deliveries(conn)
@@ -85,3 +89,4 @@ async def get_db() -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
+

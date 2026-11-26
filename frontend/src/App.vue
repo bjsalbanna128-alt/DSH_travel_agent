@@ -68,6 +68,7 @@ async function retrySession() {
           <router-link to="/history" class="nav-link">历史行程</router-link>
           <template v-if="auth.role === 'tourist'">
             <router-link :to="{ name: 'messages' }" class="nav-link">我的消息<InboxBadge /></router-link>
+            <router-link :to="{ name: 'orders' }" class="nav-link">我的订单</router-link>
             <router-link :to="{ name: 'my-tickets' }" class="nav-link">我的工单</router-link>
           </template>
           <router-link v-if="auth.isLoggedIn" to="/profile" class="nav-link">

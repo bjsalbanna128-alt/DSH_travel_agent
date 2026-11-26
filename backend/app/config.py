@@ -69,5 +69,9 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 1440
     pii_encryption_key: SecretStr = SecretStr("")
 
+    # ── 订单 ──────────────────────────────────────────────
+    order_payment_window_minutes: int = 15
+    order_review_alert_minutes: int = 30
+
 
 settings = Settings()
