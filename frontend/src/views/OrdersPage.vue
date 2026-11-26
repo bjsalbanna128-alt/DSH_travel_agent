@@ -1,52 +1,58 @@
 ﻿<script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminError } from '../api/adminResources'
 import { ordersApi } from '../api/orders'
 import { useAdminQuery } from '../composables/useAdminQuery'
 import {
   formatFen, fundStatusLabels, orderStatusLabels, orderTime,
-  type FundStatus, type OrderDetail, type OrderStatus, type OrderSummary,
+  type FundStatus, type TouristOrderDetail, type OrderStatus, type OrderSummary,
 } from '../types/orders'
 
+const route = useRoute()
+const router = useRouter()
 const page = ref(1)
 const status = ref<OrderStatus | ''>('')
 const { data, loading, error, load } = useAdminQuery(signal =>
   ordersApi.mine({ status: status.value, page: page.value, page_size: 20 }, signal))
 
-const selected = ref<OrderDetail>()
-const detailLoading = ref(false)
+const { data: selected, loading: detailLoading, error: detailError, load: refreshDetail, clear: clearDetail } =
+  useAdminQuery(signal => ordersApi.detail(String(route.query.order), signal))
 const actionLoading = ref(false)
+const currentTime = ref(Date.now())
+const clockOffset = ref(0)
+const remaining = computed(() => selected.value ? Math.max(0,
+  Math.ceil((Date.parse(selected.value.expires_at) - currentTime.value - clockOffset.value) / 1000)) : 0)
+const countdown = computed(() => [Math.floor(remaining.value / 60), remaining.value % 60].map(value => String(value).padStart(2, '0')).join(':'))
+const paymentKeys = new Map<string, string>()
+let timer: ReturnType<typeof setInterval> | undefined
 
 const pendingCount = computed(() =>
   (data.value?.items ?? []).filter(item => item.status === 'pending_payment').length)
 
-async function openDetail(row: OrderSummary) {
-  detailLoading.value = true
-  selected.value = undefined
-  try {
-    selected.value = await ordersApi.detail(row.id, new AbortController().signal)
-  } catch (failure) {
-    ElMessage.error(adminError(failure))
-  } finally {
-    detailLoading.value = false
-  }
+function openDetail(row: OrderSummary) {
+  void router.replace({ query: { ...route.query, order: row.id } })
 }
+function closeDetail() { void router.replace({ query: { ...route.query, order: undefined } }) }
 
-async function pay(order: OrderDetail) {
+async function pay(order: TouristOrderDetail) {
   actionLoading.value = true
   try {
-    selected.value = await ordersApi.pay(order.id, crypto.randomUUID())
+    const key = paymentKeys.get(order.id) ?? crypto.randomUUID()
+    paymentKeys.set(order.id, key)
+    selected.value = await ordersApi.pay(order.id, key)
     ElMessage.success('模拟支付成功，已付款等待平台确认')
     await load()
   } catch (failure) {
     ElMessage.error(adminError(failure))
+    await refreshDetail()
   } finally {
     actionLoading.value = false
   }
 }
 
-async function cancel(order: OrderDetail) {
+async function cancel(order: TouristOrderDetail) {
   const confirmed = await ElMessageBox.confirm(
     '取消后已付款将走全额模拟退款，确定取消？', '取消订单',
     { type: 'warning', confirmButtonText: '取消订单', cancelButtonText: '再想想' },
@@ -64,11 +70,11 @@ async function cancel(order: OrderDetail) {
   }
 }
 
-async function requestCancel(order: OrderDetail) {
+async function requestCancel(order: TouristOrderDetail) {
   actionLoading.value = true
   try {
     selected.value = await ordersApi.requestCancel(order.id, '行程变化')
-    ElMessage.success('已提交取消申请，等待平台与供应商核实')
+    ElMessage.success(selected.value.after_sales_ticket_id ? '已转售后工单' : '已提交，等待运营核实使用情况与供应商答复')
     await load()
   } catch (failure) {
     ElMessage.error(adminError(failure))
@@ -82,7 +88,39 @@ function search() {
   void load()
 }
 
-onMounted(load)
+function visible() {
+  if (document.visibilityState === 'visible') {
+    currentTime.value = Date.now()
+    void load()
+    if (route.query.order) void refreshDetail()
+  }
+}
+watch(() => route.query.order, key => {
+  clearDetail()
+  if (typeof key === 'string' && key) void refreshDetail()
+}, { immediate: true })
+watch(selected, order => {
+  if (order) {
+    const receivedAt = Date.now()
+    currentTime.value = receivedAt
+    clockOffset.value = Date.parse(order.server_time) - receivedAt
+  }
+})
+watch(remaining, (next, prior) => {
+  if (prior > 0 && next === 0 && selected.value?.status === 'pending_payment') {
+    void refreshDetail()
+    void load()
+  }
+})
+onMounted(() => {
+  void load()
+  timer = setInterval(() => { currentTime.value = Date.now() }, 1000)
+  document.addEventListener('visibilitychange', visible)
+})
+onUnmounted(() => {
+  clearInterval(timer)
+  document.removeEventListener('visibilitychange', visible)
+})
 </script>
 
 <template>
@@ -132,9 +170,10 @@ onMounted(load)
         layout="total, prev, pager, next" @current-change="load" />
     </div>
 
-    <el-drawer :model-value="!!selected || detailLoading" title="订单详情" size="540px"
-      @close="selected = undefined">
+    <el-drawer :model-value="typeof route.query.order === 'string'" title="订单详情" size="min(540px, 100vw)"
+      @close="closeDetail">
       <p v-if="detailLoading" role="status">正在加载…</p>
+      <el-alert v-else-if="detailError" :title="detailError" type="error" :closable="false" />
       <div v-else-if="selected" class="orders-detail">
         <el-descriptions :column="1" border>
           <el-descriptions-item label="订单号">{{ selected.order_no }}</el-descriptions-item>
@@ -147,9 +186,8 @@ onMounted(load)
           <el-descriptions-item v-if="selected.status === 'pending_payment'" label="支付截止">
             {{ orderTime(selected.expires_at) }}
           </el-descriptions-item>
-          <el-descriptions-item v-if="selected.review_note" label="平台备注">
-            {{ selected.review_note }}
-          </el-descriptions-item>
+          <el-descriptions-item v-if="selected.status === 'pending_payment'" label="剩余支付时间">{{ countdown }}</el-descriptions-item>
+          <el-descriptions-item v-if="selected.departure_date" label="出发日">{{ selected.departure_date }}</el-descriptions-item>
         </el-descriptions>
 
         <h3>项目</h3>
@@ -173,20 +211,20 @@ onMounted(load)
         <el-timeline>
           <el-timeline-item v-for="(event, index) in selected.events" :key="index"
             :timestamp="orderTime(event.created_at)">
-            {{ event.kind }}<span v-if="event.actor_name"> · {{ event.actor_name }}</span>
-            <span v-if="event.reason"> · {{ event.reason }}</span>
+            {{ event.to_status ? orderStatusLabels[event.to_status as OrderStatus] : '' }}
           </el-timeline-item>
         </el-timeline>
 
         <div class="orders-actions">
           <el-button v-if="selected.status === 'pending_payment'" type="primary"
-            :loading="actionLoading" @click="pay(selected)">
+            :loading="actionLoading" :disabled="remaining === 0" @click="pay(selected)">
             模拟支付 {{ formatFen(selected.total_sale_fen) }}
           </el-button>
           <el-button v-if="['pending_payment', 'paid_pending_review'].includes(selected.status)"
             :loading="actionLoading" @click="cancel(selected)">取消订单</el-button>
-          <el-button v-if="selected.status === 'confirmed'" :loading="actionLoading"
+          <el-button v-if="['confirmed', 'completed'].includes(selected.status) && !selected.after_sales_ticket_id" :loading="actionLoading"
             @click="requestCancel(selected)">申请取消</el-button>
+          <router-link v-if="selected.after_sales_ticket_id" :to="`/tickets/${selected.after_sales_ticket_id}`">查看售后工单</router-link>
         </div>
         <p class="orders-note">模拟支付不会扣款，仅用于演示交易流程。</p>
       </div>

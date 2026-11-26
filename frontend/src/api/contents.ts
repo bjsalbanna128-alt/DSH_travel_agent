@@ -28,4 +28,6 @@ export const contentsApi = {
   remove: (id: string) => adminRequest<void>(path(id), { method: 'DELETE' }),
   syncVectors: (rebuild: boolean) =>
     adminRequest<SyncResult>(`/contents/sync-vectors?rebuild=${rebuild}`, { method: 'POST' }),
+  vectorStatus: (signal?: AbortSignal) =>
+    adminRequest<{ pending: boolean; failed: boolean }>('/contents/vector-status', { signal }),
 }

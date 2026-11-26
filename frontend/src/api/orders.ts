@@ -1,6 +1,6 @@
 import { adminQueryString, adminRequest, readApiError } from './adminResources'
 import { travelFetch } from './travel'
-import type { OrderDetail, OrderPage } from '../types/orders'
+import type { OrderDetail, OrderPage, TouristOrderDetail } from '../types/orders'
 
 type Query = Parameters<typeof adminQueryString>[0]
 
@@ -18,21 +18,21 @@ function payload(method: 'POST', data: object, signal?: AbortSignal) {
 
 export const ordersApi = {
   create: (data: Record<string, unknown>, idempotencyKey: string) =>
-    tourist<OrderDetail>('', {
+    tourist<TouristOrderDetail>('', {
       ...payload('POST', data),
       headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey },
     }),
   mine: (params: Query, signal: AbortSignal) =>
     tourist<OrderPage>(`${adminQueryString(params)}`, { signal }),
   detail: (id: string, signal: AbortSignal) =>
-    tourist<OrderDetail>(`/${encodeURIComponent(id)}`, { signal }),
+    tourist<TouristOrderDetail>(`/${encodeURIComponent(id)}`, { signal }),
   pay: (id: string, idempotencyKey: string) =>
-    tourist<OrderDetail>(`/${encodeURIComponent(id)}/payments`,
+    tourist<TouristOrderDetail>(`/${encodeURIComponent(id)}/payments`,
       payload('POST', { idempotency_key: idempotencyKey })),
   cancel: (id: string, reason: string) =>
-    tourist<OrderDetail>(`/${encodeURIComponent(id)}/cancel`, payload('POST', { reason })),
+    tourist<TouristOrderDetail>(`/${encodeURIComponent(id)}/cancel`, payload('POST', { reason })),
   requestCancel: (id: string, reason: string) =>
-    tourist<OrderDetail>(`/${encodeURIComponent(id)}/cancel-request`, payload('POST', { reason })),
+    tourist<TouristOrderDetail>(`/${encodeURIComponent(id)}/cancel-request`, payload('POST', { reason })),
 
   queue: (params: Query, signal: AbortSignal) =>
     adminRequest<OrderPage>(`/orders${adminQueryString(params)}`, { signal, cache: 'no-store' }),
@@ -42,15 +42,10 @@ export const ordersApi = {
     adminRequest<OrderDetail>(`/orders/${encodeURIComponent(id)}/approve`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note }),
     }),
-  reject: (id: string, reason: string) =>
-    adminRequest<OrderDetail>(`/orders/${encodeURIComponent(id)}/reject`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }),
-    }),
-  resolveCancel: (id: string, approve: boolean, note: string) =>
-    adminRequest<OrderDetail>(`/orders/${encodeURIComponent(id)}/cancel-request`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ approve, note }),
-    }),
+  reject: (id: string, data: { reason: string; category: 'other' | 'stockout'; items: { product_id: string; service_date: string }[] }) =>
+    adminRequest<OrderDetail>(`/orders/${encodeURIComponent(id)}/reject`, payload('POST', data)),
+  resolveCancel: (id: string, approve: boolean, note: string, usage: 'unused' | 'unknown' | 'used') =>
+    adminRequest<OrderDetail>(`/orders/${encodeURIComponent(id)}/cancel-request`, payload('POST', { approve, note, usage })),
   sweep: () =>
     adminRequest<{ expired: number; refunds: number }>('/orders/sweep', { method: 'POST' }),
 }

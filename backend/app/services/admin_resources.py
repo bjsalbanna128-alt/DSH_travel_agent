@@ -250,10 +250,24 @@ async def list_offers(
 
 
 async def get_offer(db: AsyncSession, product: Product, day: date) -> PriceOffer:
-    offer = await db.get(PriceOffer, (product.id, day))
+    offer = await db.get(PriceOffer, (product.id, day), with_for_update=True, populate_existing=True)
     if offer is None:
         raise HTTPException(404, "该商品在此日期没有报价。")
     return offer
+
+
+async def delete_offer(db: AsyncSession, product: Product, day: date) -> None:
+    from app.db.order_models import OrderItem
+    from app.db.resource_models import OfferAllocation
+
+    offer = await get_offer(db, product, day)
+    for model in (OrderItem, OfferAllocation):
+        referenced = await db.scalar(select(model.id).where(
+            model.product_id == product.id, model.service_date == day,
+        ).limit(1))
+        if referenced:
+            raise HTTPException(409, "该日报价已有交易引用，请将其停售。")
+    await db.delete(offer)
 
 
 def _date_conflict(days: list[date]) -> HTTPException:
@@ -287,7 +301,7 @@ async def update_offer(db: AsyncSession, product: Product, day: date, patch: Off
 
 
 def _check_total(day: date, total: int | None, committed: int) -> None:
-    if total is not None and total < committed:
+    if committed > (total or 0):
         raise HTTPException(409, {
             "message": "投放数量不能低于已预占与已确认的数量之和，请先处理订单或提高投放数量。",
             "dates": [day.isoformat()],
@@ -301,7 +315,7 @@ async def batch_offers(db: AsyncSession, product: Product, data: OfferBatch) -> 
     existing = (await db.scalars(select(PriceOffer).where(
         PriceOffer.product_id == product.id,
         PriceOffer.service_date.between(data.start_date, data.end_date),
-    ))).all()
+    ).order_by(PriceOffer.service_date).with_for_update())).all()
     by_day = {row.service_date: row for row in existing}
     if by_day and not data.overwrite:
         raise _date_conflict(sorted(by_day))

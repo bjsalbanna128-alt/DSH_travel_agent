@@ -12,7 +12,7 @@ from app.api.support import Page, no_store, require_tourist
 from app.schemas.admin_resources import ResourcePage
 from app.schemas.membership import (
     MemberDetail, MemberSummary, PointEntry, PointKind, PointOverview, ProfilePatch,
-    ProfileView, TravelerCreate, TravelerPatch, TravelerView,
+    ProfileView, TouristPointOverview, TravelerCreate, TravelerPatch, TravelerView,
 )
 from app.services import members
 
@@ -84,9 +84,14 @@ async def delete_traveler(traveler_id: str, account: CurrentAccount, db: WriteDb
     return Response(status_code=204, headers={"Cache-Control": "private, no-store"})
 
 
-@tourist_router.get("/points", response_model=PointOverview)
+@tourist_router.get("/points", response_model=TouristPointOverview)
 async def my_points(account: CurrentAccount, db: DbSession):
-    return await members.overview(db, account.id)
+    from app.services.demo_points import overview
+
+    actual = await members.overview(db, account.id)
+    demo = await overview(db, account.id)
+    return TouristPointOverview(**actual.model_dump(), demo_balance=demo["balance"], demo_payments=demo["payments"],
+                                demo_refunds=demo["refunds"])
 
 
 class LedgerFilter:

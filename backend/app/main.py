@@ -33,6 +33,9 @@ from app.db import database
 from app.db.database import init_db
 from app.services.notifications import notification_worker
 from app.services.point_expiry import point_expiry_worker
+from app.services.sales_maintenance import sales_worker
+from app.services.stock import StockUnavailable
+from fastapi.responses import JSONResponse
 
 
 @asynccontextmanager
@@ -68,7 +71,8 @@ async def lifespan(app: FastAPI):
     except Exception:
         print("[TravelAgent] Redis unavailable — caching disabled")
 
-    async with notification_worker(database.async_session), point_expiry_worker(database.async_session):
+    async with (notification_worker(database.async_session), point_expiry_worker(database.async_session),
+                sales_worker(database.async_session)):
         yield
     print("[TravelAgent] Shutting down")
 
@@ -100,6 +104,11 @@ app.include_router(order_router, prefix="/api")
 app.include_router(checkout_router, prefix="/api")
 app.include_router(admin_router, prefix="/api", dependencies=[Depends(require_operator)])
 app.include_router(ws_router)
+
+
+@app.exception_handler(StockUnavailable)
+async def inconsistent_stock(_request, error):
+    return JSONResponse(status_code=409, content={"detail": error.detail()})
 
 
 @app.get("/health")

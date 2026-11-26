@@ -4,6 +4,8 @@ import logging
 from difflib import SequenceMatcher
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.services.amap import AMAP_MAX_OFFSET, search_poi
 from app.services.chroma_store import get_chroma_store
 
@@ -130,6 +132,7 @@ async def search_attractions_hybrid(
     chroma_only: bool = False,
     *,
     travel_date=None,
+    end_date=None,
     anchor: dict | None = None,
     session=None,
 ) -> list[dict[str, Any]]:
@@ -155,8 +158,12 @@ async def search_attractions_hybrid(
     except Exception as e:
         logger.warning(f"Content attraction search failed (will use Amap only): {e}")
 
+    if session is not None:
+        content_results = await _resolve_catalog(session, content_results, city, "attraction", travel_date, end_date)
+    else:
+        content_results = []
     if chroma_only:
-        return content_results
+        return content_results[:limit]
 
     amap_offset = min(limit, AMAP_MAX_OFFSET)
     if amap_offset < limit:
@@ -176,17 +183,14 @@ async def search_attractions_hybrid(
     ]
 
     merged = _merge_and_dedup(content_results, amap_results, prefer_chroma=True)
-    merged = _rerank(query, merged, top_k=limit)
+    merged = _rerank(query, merged)
     if session is not None:
-        from app.services.sellability import annotate_offers, sort_candidates
-
-        merged = await annotate_offers(session, merged, kind="attraction", travel_date=travel_date)
-        merged = sort_candidates(merged)
+        merged = await _rank_catalog(session, merged, "attraction", travel_date, end_date)
     logger.info(
         f"Hybrid attraction search: {len(content_results)} content + {len(amap_results)} amap "
         f"→ {len(merged)} re-ranked"
     )
-    return merged
+    return merged[:limit]
 
 
 async def search_hotels_hybrid(
@@ -195,6 +199,7 @@ async def search_hotels_hybrid(
     count: int = 10,
     *,
     travel_date=None,
+    end_date=None,
     anchor: dict | None = None,
     session=None,
 ) -> list[dict[str, Any]]:
@@ -211,6 +216,10 @@ async def search_hotels_hybrid(
     except Exception as e:
         logger.warning(f"Content hotel search failed: {e}")
 
+    if session is not None:
+        content_results = await _resolve_catalog(session, content_results, city, "hotel", travel_date, end_date)
+    else:
+        content_results = []
     amap_results = await _search_amap_items(
         keywords=city + "酒店",
         city=city,
@@ -226,23 +235,44 @@ async def search_hotels_hybrid(
         ]
 
     merged = _merge_and_dedup(content_results, amap_results, prefer_chroma=True)
-    merged = _rerank(city + " 酒店", merged, top_k=count)
+    merged = _rerank(city + " 酒店", merged)
     if session is not None:
-        from app.services.sellability import annotate_offers, sort_candidates
-
-        merged = await annotate_offers(session, merged, kind="hotel", travel_date=travel_date)
+        merged = await _rank_catalog(session, merged, "hotel", travel_date, end_date, anchor=anchor)
         if max_price_per_night > 0:
             merged = [
                 hotel for hotel in merged
                 if not (hotel.get("offer") or {}).get("sellable")
                 or hotel["offer"]["price_cny"] <= max_price_per_night
             ]
-        merged = sort_candidates(merged, anchor=anchor)
     logger.info(
         f"Hybrid hotel search: {len(content_results)} content + {len(amap_results)} amap "
         f"→ {len(merged)} re-ranked"
     )
-    return merged
+    return merged[:count]
+
+
+async def _resolve_catalog(session, items, city, kind, day, end_date):
+    from app.services.sellability import reclaim_expired_holds, resolve_content_candidates
+
+    try:
+        await reclaim_expired_holds(session)
+        return await resolve_content_candidates(session, items, city, kind, day, end_date)
+    except SQLAlchemyError:
+        logger.warning("可售内容查询不可用，继续使用地图候选")
+        return []
+
+
+async def _rank_catalog(session, items, kind, day, end_date, *, anchor=None):
+    from app.services.sellability import annotate_offers, sort_candidates
+
+    if any(item.get("content_id") for item in items):
+        try:
+            items = await annotate_offers(session, items, kind=kind, travel_date=day, end_date=end_date)
+        except SQLAlchemyError:
+            logger.warning("报价查询不可用，候选仅供参考")
+            for item in items:
+                item.pop("offer", None)
+    return sort_candidates(items, anchor=anchor)
 
 
 async def search_restaurants_hybrid(

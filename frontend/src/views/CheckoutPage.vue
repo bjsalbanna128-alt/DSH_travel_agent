@@ -1,56 +1,58 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { adminError } from '../api/adminResources'
+import { adminError, AdminRequestError } from '../api/adminResources'
 import { checkoutApi } from '../api/checkout'
 import { ordersApi } from '../api/orders'
 import { useAdminQuery } from '../composables/useAdminQuery'
-import { formatFen, kindLabels, type CheckoutItem } from '../types/checkout'
+import { formatFen, kindLabels, offerLabels, type CheckoutItem } from '../types/checkout'
 
 const route = useRoute()
 const router = useRouter()
 const tripId = computed(() => String(route.params.tripId))
-const { data, loading, error, load } = useAdminQuery(signal => checkoutApi.options(tripId.value, signal))
-
+const departure = ref('')
+const { data, loading, error, load, clear } = useAdminQuery(signal => checkoutApi.options(tripId.value, signal, departure.value))
 const chosen = reactive<Record<string, number>>({})
 const contact = reactive({ name: '', phone: '' })
 const travelers = reactive([{ name: '', document_type: '身份证', document_number: '', phone: '' }])
 const submitting = ref(false)
+const conflict = ref<AdminRequestError>()
+const conflictNames = ref<Record<string, string>>({})
+const submitError = ref('')
+let intent: { payload: string; key: string } | undefined
 
+const selectedItems = computed(() => (data.value?.items ?? []).filter(item => item.sellable && quantity(item)))
+const total = computed(() => selectedItems.value.reduce((sum, item) => sum + (item.unit_price_fen ?? 0) * quantity(item), 0))
+const staleSelection = computed(() => Object.keys(chosen).some(key => chosen[key] && !selectedItems.value.some(item => item.key === key))
+  || selectedItems.value.some(item => quantity(item) > limit(item)))
+const canSubmit = computed(() => !loading.value && !error.value && !submitting.value && !staleSelection.value
+  && Boolean(data.value?.departure_date) && selectedItems.value.length > 0)
 
-const total = computed(() => (data.value?.items ?? [])
-  .filter(item => item.sellable && chosen[item.product_id])
-  .reduce((sum, item) => sum + item.unit_price_fen * (chosen[item.product_id] ?? 0), 0))
-
-const selectedCount = computed(() => Object.values(chosen).filter(Boolean).length)
-
-function key(item: CheckoutItem) {
-  return item.product_id
+function limit(item: CheckoutItem) { return Math.min(item.kind === 'hotel' ? 5 : 20, item.remaining ?? 0) }
+function quantity(item: CheckoutItem) { return chosen[item.key] ?? 0 }
+function changed(item: CheckoutItem) {
+  return conflict.value?.conflicts.find(entry => item.product_id === entry.product_id
+    && (!entry.service_date || item.days.some(day => day.service_date === entry.service_date)))
 }
-
 function toggle(item: CheckoutItem) {
-  if (!item.sellable) return
-  chosen[key(item)] = chosen[key(item)] ? 0 : item.quantity
+  if (!item.sellable && !quantity(item)) return
+  chosen[item.key] = quantity(item) ? 0 : item.quantity
+  intent = undefined
 }
-
-function quantity(item: CheckoutItem) {
-  return chosen[key(item)] ?? 0
-}
-
 function setQuantity(item: CheckoutItem, value: number) {
-  chosen[key(item)] = Math.max(0, Math.min(30, value || 0))
+  chosen[item.key] = Math.max(1, Math.min(limit(item), value || 1))
+  intent = undefined
 }
-
 function addTraveler() {
   travelers.push({ name: '', document_type: '身份证', document_number: '', phone: '' })
 }
+function renderGroup(kind: 'hotel' | 'ticket') {
+  return (data.value?.items ?? []).filter(item => item.kind === kind)
+}
 
 async function submit() {
-  if (!selectedCount.value) {
-    ElMessage.warning('请至少勾选一项。')
-    return
-  }
+  if (!canSubmit.value) return
   if (!contact.name.trim() || !contact.phone.trim()) {
     ElMessage.warning('请填写联系人与联系电话。')
     return
@@ -61,39 +63,52 @@ async function submit() {
     return
   }
   submitting.value = true
+  submitError.value = ''
   try {
-    const selected = (data.value?.items ?? [])
-      .filter(item => item.sellable && chosen[key(item)])
-      .map(item => item.kind === 'hotel'
-        ? {
-            kind: 'hotel', product_id: item.product_id,
-            check_in: item.check_in, check_out: item.check_out,
-            quantity: chosen[key(item)],
-          }
-        : {
-            kind: 'ticket', product_id: item.product_id,
-            service_date: item.service_date, quantity: chosen[key(item)],
-          })
-    const order = await ordersApi.create({
-      contact_name: contact.name.trim(),
-      contact_phone: contact.phone.trim(),
-      trip_id: tripId.value,
-      travelers: filled,
-      selected,
-    }, crypto.randomUUID())
-    ElMessage.success(`订单 ${order.order_no} 已创建，请在 15 分钟内完成支付`)
-    void router.push({ name: 'orders' })
+    const selected = selectedItems.value.map(item => ({
+      kind: item.kind, product_id: item.product_id,
+      ...(item.kind === 'hotel' ? { check_in: item.check_in, check_out: item.check_out } : { service_date: item.service_date }),
+      quantity: quantity(item),
+      quotes: item.days.map(day => ({ service_date: day.service_date, token: day.token })),
+    }))
+    const payload = {
+      contact_name: contact.name.trim(), contact_phone: contact.phone.trim(),
+      trip_id: tripId.value, departure_date: data.value?.departure_date,
+      travelers: filled, selected,
+    }
+    const encoded = JSON.stringify(payload)
+    if (intent?.payload !== encoded) intent = { payload: encoded, key: crypto.randomUUID() }
+    const order = await ordersApi.create(payload, intent.key)
+    void router.push({ name: 'orders', query: { order: order.id } })
   } catch (failure) {
-    ElMessage.error(adminError(failure))
+    submitError.value = adminError(failure)
+    if (failure instanceof AdminRequestError && failure.status === 409 && failure.conflicts.length) {
+      conflict.value = failure
+      conflictNames.value = Object.fromEntries((data.value?.items ?? [])
+        .filter(item => item.product_id).map(item => [item.product_id!, item.name]))
+      intent = undefined
+      await load()
+      for (const key of Object.keys(chosen)) {
+        if (!data.value?.items.some(item => item.key === key)) delete chosen[key]
+      }
+    }
   } finally {
     submitting.value = false
   }
 }
 
-function renderGroup(kind: 'hotel' | 'ticket') {
-  return (data.value?.items ?? []).filter(item => item.kind === kind)
-}
-
+watch(departure, () => {
+  for (const key of Object.keys(chosen)) delete chosen[key]
+  intent = undefined
+  conflict.value = undefined
+  submitError.value = ''
+  void load()
+}, { flush: 'sync' })
+watch(tripId, () => {
+  clear()
+  if (departure.value) departure.value = ''
+  else void load()
+})
 onMounted(load)
 </script>
 
@@ -102,46 +117,47 @@ onMounted(load)
     <header class="checkout-header">
       <el-button text @click="router.back()">← 返回行程</el-button>
       <h1>选择要预订的项目</h1>
-      <span class="checkout-hint">只订需要的，也可以全部不选直接看路书</span>
+      <span class="checkout-meta">可以按需选购，免费路书随时可看。</span>
     </header>
-
+    <label v-if="data?.date_selectable">
+      出发日期 <input v-model="departure" type="date" aria-label="出发日期" :min="data.today" :disabled="submitting" />
+    </label>
+    <p v-else-if="data?.departure_date">出发日期 {{ data.departure_date }}</p>
     <p v-if="loading" role="status">正在核对价格与库存…</p>
     <el-alert v-else-if="error" :title="error" type="error" :closable="false" show-icon />
-    <el-alert v-if="data?.undated_count" type="warning" :closable="false" show-icon
-      title="这份行程还没有确定出行日期，价格与库存无法校验；先在聊天里补充日期后重新生成行程，即可预订。" />
-    <p v-if="data && !data.items.length" class="checkout-empty">
-      <template v-if="!data.offer_count">
-        本次规划没有拿到我们的库存（商品检索异常，或该城市暂无上架商品）。请重新生成行程后再试。
-      </template>
-      <template v-else>
-        这份行程里没有可预订的项目（未绑定商品的地点只能看，不能订）。
-      </template>
+    <el-alert v-if="submitError" :title="submitError" type="warning" :closable="false" show-icon />
+    <ul v-if="conflict" class="checkout-breakdown">
+      <li v-for="(entry, index) in conflict.conflicts" :key="index">
+        {{ conflictNames[entry.product_id ?? ''] ?? '所选项目' }} {{ entry.service_date }} · {{ offerLabels[entry.reason] || '需重新确认' }}
+      </li>
+    </ul>
+    <p v-if="!loading && data?.date_selectable && !data.departure_date">请选择出发日以查询价格和库存。</p>
+    <p v-else-if="!loading && data && !data.sellable_count">
+      {{ data.items.length ? '当前日期没有可订项目，请查看各项原因。' : '这份路书没有可预订的住宿或景点。' }}
     </p>
-
-    <template v-else>
+    <template v-if="data && !loading && !error">
       <section v-for="kind in (['hotel', 'ticket'] as const)" :key="kind">
         <template v-if="renderGroup(kind).length">
           <h2>{{ kindLabels[kind] }}</h2>
-          <div v-for="item in renderGroup(kind)" :key="item.product_id + item.service_date"
-            class="checkout-item" :class="{ 'checkout-item-off': !item.sellable }">
-            <el-checkbox :model-value="!!chosen[item.product_id]" :disabled="!item.sellable"
+          <div v-for="item in renderGroup(kind)" :key="item.key" class="checkout-item">
+            <el-checkbox :model-value="!!quantity(item)" :disabled="submitting || (!item.sellable && !quantity(item))"
               @change="toggle(item)">
-              {{ item.name }}
+              {{ item.place_name === item.name ? item.name : `${item.place_name} · ${item.name}` }}
             </el-checkbox>
-            <span class="checkout-meta">{{ item.service_date }}</span>
-            <span class="checkout-meta">{{ formatFen(item.unit_price_fen) }}</span>
-            <el-tag v-if="item.needs_date" type="warning" size="small">需先确定出行日期</el-tag>
-            <el-tag v-else-if="!item.sellable" type="info" size="small">已售罄 / 不可售</el-tag>
-            <el-tag v-else-if="item.remaining !== null && item.remaining <= 5" type="warning" size="small">
-              剩 {{ item.remaining }}
-            </el-tag>
-            <el-input-number :model-value="quantity(item)" :min="0" :max="30" size="small"
-              :disabled="!chosen[item.product_id]"
-              @update:model-value="(value: number | undefined) => setQuantity(item, value ?? 0)" />
+            <span class="checkout-meta">{{ item.check_out ? `${item.check_in} 至 ${item.check_out}（退房）` : item.service_date || `第 ${item.days[0]?.day} 天` }}</span>
+            <span v-if="item.unit_price_fen !== null" class="checkout-meta">{{ formatFen(item.unit_price_fen) }}{{ item.status === 'needs_date' ? ' 起（参考）' : !item.sellable ? '（参考）' : item.kind === 'hotel' ? ' / 间（全程）' : ' / 张' }}</span>
+            <el-tag :type="item.sellable ? 'success' : 'info'" size="small">{{ offerLabels[item.status] }}{{ item.sellable ? ` · 余 ${item.remaining}` : '' }}</el-tag>
+            <span v-if="item.status === 'reference'" class="checkout-meta">{{ item.reason === 'reference' ? '无当前可售绑定' : offerLabels[item.reason] }}</span>
+            <el-tag v-if="changed(item)" type="warning" size="small">{{ offerLabels[changed(item)!.reason] || '报价已变化' }}</el-tag>
+            <ul v-if="item.kind === 'hotel' && item.service_date" class="checkout-breakdown">
+              <li v-for="day in item.days" :key="day.day">{{ day.service_date }} · {{ day.price_fen === null ? '无报价' : formatFen(day.price_fen) }}{{ day.reason !== 'sellable' ? ` · ${offerLabels[day.reason]}` : '' }}</li>
+            </ul>
+            <el-input-number v-if="item.sellable" :model-value="quantity(item) || item.quantity" :min="1" :max="limit(item)" size="small"
+              :aria-label="`${item.name} 数量`" :disabled="submitting || !quantity(item)"
+              @update:model-value="(value: number | undefined) => setQuantity(item, value ?? 1)" />
           </div>
         </template>
       </section>
-
       <section class="checkout-form">
         <h2>联系人与出行人</h2>
         <div class="checkout-grid">
@@ -150,15 +166,16 @@ onMounted(load)
         </div>
         <div v-for="(traveler, index) in travelers" :key="index" class="checkout-grid">
           <el-input v-model="traveler.name" :placeholder="`出行人 ${index + 1}`" maxlength="50" />
-          <el-input v-model="traveler.document_number" placeholder="证件号（仅保存掩码）" maxlength="64" />
+          <el-input v-model="traveler.document_number" placeholder="证件号（选填，加密保存）" maxlength="64" />
           <el-input v-model="traveler.phone" placeholder="手机号" maxlength="32" />
         </div>
-        <el-button text @click="addTraveler">+ 添加出行人</el-button>
+        <p class="checkout-meta">证件号用于记录本单出行资料，暂不核验。证件号码加密保存，运营仅可见脱敏号码。</p>
+        <el-button text :disabled="travelers.length >= 20" @click="addTraveler">+ 添加出行人</el-button>
       </section>
-
       <footer class="checkout-footer">
-        <span>已选 {{ selectedCount }} 项，合计 <strong>{{ formatFen(total) }}</strong></span>
-        <el-button type="primary" :loading="submitting" @click="submit">提交订单</el-button>
+        <span>已选 {{ selectedItems.length }} 项，合计 <strong>{{ formatFen(total) }}</strong></span>
+        <span v-if="staleSelection">请调整不可售项目或超出库存的数量。</span>
+        <el-button type="primary" :loading="submitting" :disabled="!canSubmit" @click="submit">确认报价并提交订单</el-button>
       </footer>
     </template>
   </section>
@@ -166,17 +183,13 @@ onMounted(load)
 
 <style scoped>
 .checkout-page { max-width: 900px; margin: 0 auto; padding: 20px 16px 40px; }
-.checkout-header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 12px; }
+.checkout-header, .checkout-item, .checkout-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.checkout-header { margin-bottom: 12px; }
 .checkout-header h1 { margin: 0; font-size: 22px; }
-.checkout-hint { color: #909399; font-size: 13px; }
-.checkout-empty { color: #909399; padding: 40px 0; text-align: center; }
-.checkout-item { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #ebeef5; }
-.checkout-item-off { opacity: .55; }
+.checkout-item { padding: 10px 0; border-bottom: 1px solid #ebeef5; }
 .checkout-meta { color: #606266; font-size: 13px; }
+.checkout-breakdown { margin: 0; font-size: 13px; }
 .checkout-form { margin-top: 24px; }
 .checkout-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
-.checkout-footer { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; }
+.checkout-footer { justify-content: space-between; margin-top: 20px; }
 </style>
-
-
-

@@ -3,6 +3,9 @@ import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useTravelStore } from '../stores/travel'
 import { decideTrip, getTrip } from '../api/travel'
+import { checkoutApi } from '../api/checkout'
+import { formatFen, offerLabels } from '../types/checkout'
+import { useAdminQuery } from '../composables/useAdminQuery'
 import MiniMap from '../components/MiniMap.vue'
 import { itineraryBudget } from '../itineraryBudget'
 import type { DayPlan, TripRecord } from '../types/travel'
@@ -23,6 +26,20 @@ const notice = ref('')
 
 const itinerary = computed(() => trip.value?.itinerary)
 const dayPlans = computed(() => itinerary.value?.day_plans ?? [])
+const { data: offers, load: loadOffers, clear: clearOffers, error: offersError } = useAdminQuery(
+  signal => checkoutApi.options(tripId.value, signal),
+)
+watch(() => trip.value?.status === 'completed' ? trip.value.id : null, (id) => {
+  clearOffers()
+  if (id) void loadOffers()
+})
+function offerLabel(kind: 'ticket' | 'hotel', name: string, day: number) {
+  const items = offers.value?.items.filter(item => item.kind === kind && item.place_name === name && item.days.some(entry => entry.day === day))
+  if (!items?.length) return ''
+  const priority = ['sellable', 'sold_out', 'needs_date', 'reference'] as const
+  const item = priority.map(status => items.find(item => item.status === status)).find(Boolean)
+  return item ? offerLabels[item.status] : ''
+}
 
 const currentDay = computed<DayPlan | null>(() =>
   dayPlans.value.find(d => d.day === activeDay.value) ?? null
@@ -145,8 +162,12 @@ const budgetItems = computed(() => {
           </div>
         </div>
         <div class="header-budget">
-          <el-button v-if="!isDraft" :to="{ name: 'checkout', params: { tripId: tripId } }" tag="router-link"
+          <el-button v-if="trip?.status === 'completed'" :to="{ name: 'checkout', params: { tripId: tripId } }" tag="router-link"
             type="primary" plain>预订行程中的项目</el-button>
+          <span v-if="offers?.sellable_count" class="trip-offer-summary">{{ offers.sellable_count }} 项可订 · 建议数量参考合计 {{ formatFen(offers.total_fen) }}</span>
+          <span v-else-if="offers?.date_selectable" class="trip-offer-summary">可在加购页选出发日查询报价和库存。</span>
+          <span v-else-if="offersError" class="trip-offer-summary">暂时无法核对报价，可继续查看路书。</span>
+          <span v-else-if="offers" class="trip-offer-summary">当前日期暂无可订项目，可查看各项目状态。</span>
           <div class="budget-amount">{{ formatPrice(itinerary?.total_budget_estimate_cny ?? 0) }}</div>
           <div class="budget-sub">预估总费用</div>
           <el-button v-if="!isDraft" type="primary" plain size="small" style="margin-top:8px" @click="router.push(`/trip/${tripId}/edit`)">
@@ -200,6 +221,7 @@ const budgetItems = computed(() => {
                   >
                     <div class="attr-header">
                       <span class="attr-name">{{ a.name }}</span>
+                      <el-tag v-if="offerLabel('ticket', a.name, currentDay.day)" size="small">{{ offerLabel('ticket', a.name, currentDay.day) }}</el-tag>
                       <el-tag size="small" :type="a.category === 'natural' ? 'success' : a.category === 'entertainment' ? 'warning' : ''">
                         {{ categoryTag(a.category) }}
                       </el-tag>
@@ -253,7 +275,9 @@ const budgetItems = computed(() => {
                 <div v-if="currentDay.hotel" class="day-section">
                   <h3>住宿</h3>
                   <div class="hotel-card">
-                    <div class="hotel-name">{{ currentDay.hotel.name }}</div>
+                    <div class="hotel-name">{{ currentDay.hotel.name }}
+                      <el-tag v-if="offerLabel('hotel', currentDay.hotel.name, currentDay.day)" size="small">{{ offerLabel('hotel', currentDay.hotel.name, currentDay.day) }}</el-tag>
+                    </div>
                     <div class="hotel-meta">
                       <span>{{ currentDay.hotel.area }}</span>
                       <span>{{ formatPrice(currentDay.hotel.price_per_night_cny) }}/晚</span>

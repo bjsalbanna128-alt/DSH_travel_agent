@@ -4,6 +4,7 @@ import asyncio
 import os
 from datetime import date, timedelta
 from secrets import token_hex
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,7 +19,8 @@ from app.db.content_models import PlaceContent, PlaceContentProduct
 from app.db.resource_models import PriceOffer, Product, Supplier
 from app.main import app
 from app.services import chroma_store, contents
-from app.services.sellability import annotate_offers, sort_candidates
+from app.services.sellability import annotate_offers, resolve_content_candidates, sort_candidates
+from app.schemas.contents import BindProducts
 
 DAY = date.today() + timedelta(days=3)
 
@@ -118,6 +120,71 @@ async def check_admin_api_requires_operator(sessions, client):
     assert client.get("/api/v1/admin/contents").status_code in (401, 403)
 
 
+def test_vector_failure_keeps_sql_publication_authoritative(sessions, monkeypatch):
+    from fastapi import HTTPException
+
+    async def fail(*args, **kwargs):
+        raise OSError("vector temporarily unavailable")
+
+    async def run():
+        await importer.main(["北京"])
+        await beijing.main()
+        async with sessions.begin() as db:
+            attraction = await db.scalar(select(PlaceContent).where(PlaceContent.name == "故宫博物院"))
+            hotel_product = await db.scalar(select(Product).where(Product.type == "hotel_room").limit(1))
+            hint = [{"content_id": attraction.id, "kind": "attraction", "city": "北京"}]
+            assert (await annotate_offers(db, hint, kind="attraction", travel_date=DAY))[0]["offer"]
+            with pytest.raises(HTTPException) as invalid:
+                await contents.bind_products(db, attraction.id, BindProducts(product_ids=[hotel_product.id]), "ops")
+            assert invalid.value.status_code == 422
+            await contents.unpublish_content(db, attraction.id, "ops")
+        monkeypatch.setattr(contents, "sync_vectors", fail)
+        async with sessions.begin() as db:
+            assert await contents.process_vector_job(db) is None
+        async with sessions.begin() as db:
+            assert await contents.vector_status(db) == {"pending": True, "failed": True}
+            assert (await annotate_offers(db, hint, kind="attraction", travel_date=None))[0]["offer"] is None
+            await contents.bind_products(db, attraction.id, BindProducts(product_ids=[]), "ops")
+            await contents.delete_content(db, attraction.id)
+        async with sessions() as db:
+            resolved = await resolve_content_candidates(db, hint, "北京", "attraction", DAY)
+            assert attraction.id not in {poi["content_id"] for poi in resolved}
+
+    asyncio.run(run())
+
+
+def test_distance_without_coordinates_and_next_day_offer(sessions):
+    async def run():
+        await importer.main(["北京"])
+        await beijing.main()
+        async with sessions.begin() as db:
+            content_id, product_id = (await db.execute(select(
+                PlaceContentProduct.content_id, Product.id,
+            ).join(Product).where(Product.type == "hotel_room").limit(1))).one()
+            first = await db.get(PriceOffer, (product_id, DAY))
+            first.total_quantity = 0
+            poi = {"content_id": content_id, "kind": "hotel"}
+            assert (await annotate_offers(db, [poi], kind="hotel", travel_date=DAY))[0]["offer"] is None
+            assert (await annotate_offers(db, [poi], kind="hotel", travel_date=DAY, end_date=DAY + timedelta(days=1)))[0]["offer"]
+        near = {"location": {"lat": 39.9, "lng": 116.41}}
+        distant = {"location": {"lat": 40, "lng": 116.41}}
+        unknown = {"name": "未知"}
+        assert sort_candidates([unknown, distant, near], anchor={"lat": 39.9, "lng": 116.4}) == [near, distant, unknown]
+
+    asyncio.run(run())
+
+
+def test_compiler_dates_take_only_the_confirmed_departure():
+    from app.graph.nodes.compiler import _apply_day_dates
+    from app.schemas.travel_state import DayPlan
+
+    plans = [DayPlan(day=1, date="2000-01-01"), DayPlan(day=2, date="2000-01-01")]
+    _apply_day_dates(plans, "2026-12")
+    assert [p.date for p in plans] == ["", ""]
+    _apply_day_dates(plans, "2026年12月12日出发")
+    assert [p.date for p in plans] == ["2026-12-12", "2026-12-13"]
+
+
 SCENARIOS = [
     check_beijing_import,
     check_import_is_idempotent,
@@ -142,6 +209,9 @@ def sessions(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "jwt_secret_key", token_hex(32))
     monkeypatch.setattr(settings, "chroma_persist_path", str(tmp_path / "chroma"))
     monkeypatch.setattr(chroma_store, "_chroma_store_instance", None)
+    monkeypatch.setattr(chroma_store, "get_embedding_provider", lambda: SimpleNamespace(
+        embed_query=lambda _text: [1.0, 0.0, 0.0],
+    ))
     asyncio.run(database.init_db())
     yield factory
     asyncio.run(engine.dispose())

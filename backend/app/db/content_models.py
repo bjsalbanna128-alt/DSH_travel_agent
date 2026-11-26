@@ -73,3 +73,11 @@ class PlaceContentProduct(Base):
     product_id: Mapped[str] = mapped_column(
         ForeignKey("products.id", ondelete="CASCADE"), primary_key=True,
     )
+
+
+class ContentVectorJob(Base):
+    __tablename__ = "content_vector_job"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pending: Mapped[bool]
+    failed: Mapped[bool]

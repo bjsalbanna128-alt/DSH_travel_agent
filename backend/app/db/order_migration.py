@@ -3,14 +3,16 @@
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Connection
 
-COLUMN = "document_ciphertext"
-
-
 def ensure_order_traveler_ciphertext(conn: Connection) -> None:
     inspector = inspect(conn)
-    if not inspector.has_table("order_travelers"):
-        return
-    columns = {column["name"] for column in inspector.get_columns("order_travelers")}
-    if COLUMN in columns:
-        return
-    conn.execute(text(f"ALTER TABLE order_travelers ADD COLUMN {COLUMN} BLOB"))
+    encrypted = "BYTEA" if conn.dialect.name == "postgresql" else "BLOB"
+    for table, fields in (
+        ("order_travelers", {"document_ciphertext": encrypted}),
+        ("orders", {"request_fingerprint": "VARCHAR(64)", "departure_date": "DATE"}),
+    ):
+        if not inspector.has_table(table):
+            continue
+        present = {column["name"] for column in inspector.get_columns(table)}
+        for name, sql_type in fields.items():
+            if name not in present:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))

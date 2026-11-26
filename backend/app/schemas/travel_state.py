@@ -62,6 +62,7 @@ class TravelState(TypedDict, total=False):
     restriction_snapshot: dict[str, Any]
     scenic_candidates_filtered: bool
     scenic_pois: list[dict[str, Any]]
+    catalog_available: bool
 
     # ── Error handling ──
     errors: list[dict[str, Any]]

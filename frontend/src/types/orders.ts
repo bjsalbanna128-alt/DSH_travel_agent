@@ -15,6 +15,7 @@ export const fundStatusLabels: Record<FundStatus, string> = {
 
 export interface OrderItemView {
   id: string
+  product_id: string
   product_name: string
   product_type: string
   attributes: Record<string, unknown>
@@ -71,19 +72,27 @@ export interface OrderSummary {
   review_overdue?: boolean
 }
 
-export interface OrderDetail extends OrderSummary {
-  user_id: string
+export interface TouristOrderDetail extends OrderSummary {
   trip_id: string | null
+  departure_date: string | null
   contact_name: string
   contact_phone: string
+  cancelled_at: string | null
+  server_time: string
+  after_sales_ticket_id: string | null
+  items: OrderItemView[]
+  travelers: OrderTravelerView[]
+  events: Omit<OrderEventView, 'actor_name' | 'reason'>[]
+  payments: OrderPaymentView[]
+  refunds: Omit<OrderRefundView, 'attempts' | 'last_error'>[]
+}
+
+export interface OrderDetail extends TouristOrderDetail {
+  user_id: string
   total_cost_fen: number
   review_note: string
   cancel_reason: string
-  cancelled_at: string | null
-  items: OrderItemView[]
-  travelers: OrderTravelerView[]
   events: OrderEventView[]
-  payments: OrderPaymentView[]
   refunds: OrderRefundView[]
 }
 

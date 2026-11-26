@@ -17,6 +17,9 @@ const { data, loading, error, load } = useAdminQuery(signal =>
 const selected = ref<OrderDetail>()
 const detailLoading = ref(false)
 const actionLoading = ref(false)
+const stockouts = ref<string[]>([])
+const supplierReply = ref('')
+const usage = ref<'unknown' | 'unused' | 'used'>('unknown')
 
 function search() {
   page.value = 1
@@ -28,6 +31,9 @@ async function openDetail(row: OrderSummary) {
   selected.value = undefined
   try {
     selected.value = await ordersApi.adminDetail(row.id, new AbortController().signal)
+    stockouts.value = []
+    supplierReply.value = ''
+    usage.value = 'unknown'
   } catch (failure) {
     ElMessage.error(adminError(failure))
   } finally {
@@ -49,13 +55,15 @@ async function approve(order: OrderDetail) {
 }
 
 async function reject(order: OrderDetail) {
-  const reason = await ElMessageBox.prompt('请填写拒绝原因（游客可见）', '拒绝订单', {
+  const reason = await ElMessageBox.prompt(stockouts.value.length ? '记录缺货原因。勾选的日报价将同时停售。' : '记录其他拒绝原因。缺货时请先勾选对应日报价。', '拒绝订单', {
     inputPattern: /\S+/, inputErrorMessage: '原因不能为空',
   }).then(result => result.value, () => null)
   if (!reason) return
   actionLoading.value = true
   try {
-    selected.value = await ordersApi.reject(order.id, reason)
+    const items = order.items.filter(item => stockouts.value.includes(item.id))
+      .map(item => ({ product_id: item.product_id, service_date: item.service_date }))
+    selected.value = await ordersApi.reject(order.id, { reason, category: items.length ? 'stockout' : 'other', items })
     ElMessage.success('已拒绝并登记全额退款')
     await load()
   } catch (failure) {
@@ -69,9 +77,10 @@ async function resolveCancel(order: OrderDetail, approveCancel: boolean) {
   actionLoading.value = true
   try {
     selected.value = await ordersApi.resolveCancel(
-      order.id, approveCancel, approveCancel ? '已核实酒店同意退订' : '供应商暂不同意退订',
+      order.id, approveCancel, supplierReply.value.trim(), usage.value,
     )
-    ElMessage.success(approveCancel ? '已取消并登记退款' : '已驳回取消申请')
+    ElMessage.success(usage.value === 'used' ? '已转售后工单' : usage.value === 'unknown' ? '已记录，继续人工核实'
+      : approveCancel ? '已取消并登记退款' : '已驳回取消申请')
     await load()
   } catch (failure) {
     ElMessage.error(adminError(failure))
@@ -161,6 +170,12 @@ onMounted(load)
         </el-descriptions>
 
         <el-table :data="selected.items" size="small" row-key="id">
+          <el-table-column v-if="selected.status === 'paid_pending_review'" label="缺货" width="73">
+            <template #default="{ row }">
+              <el-checkbox :model-value="stockouts.includes(row.id)" :aria-label="`${row.product_name} ${row.service_date} 缺货`"
+                @change="(marked: unknown) => stockouts = marked ? [...stockouts, row.id] : stockouts.filter(id => id !== row.id)" />
+            </template>
+          </el-table-column>
           <el-table-column prop="product_name" label="商品" min-width="160" />
           <el-table-column prop="service_date" label="服务日" width="110" />
           <el-table-column prop="quantity" label="数量" width="70" />
@@ -179,15 +194,25 @@ onMounted(load)
 
         <div class="resource-actions">
           <el-button v-if="selected.status === 'paid_pending_review'" type="primary"
-            :loading="actionLoading" @click="approve(selected)">通过复核</el-button>
+            :loading="actionLoading" :disabled="stockouts.length > 0" @click="approve(selected)">通过复核</el-button>
           <el-button v-if="selected.status === 'paid_pending_review'" type="danger" plain
             :loading="actionLoading" @click="reject(selected)">拒绝（全额退款）</el-button>
-          <template v-if="selected.status === 'cancel_requested'">
-            <el-button type="primary" :loading="actionLoading" @click="resolveCancel(selected, true)">
-              同意取消并退款
+        </div>
+        <div v-if="selected.status === 'cancel_requested'" class="resource-stack">
+          <el-select v-model="usage" aria-label="使用核实结果">
+            <el-option value="unknown" label="使用情况待核实" />
+            <el-option value="unused" label="已核实全部未使用" />
+            <el-option value="used" label="至少一项已使用" />
+          </el-select>
+          <el-input v-model="supplierReply" type="textarea" maxlength="500" aria-label="实际供应商答复"
+            placeholder="记录供应商实际答复或待核实的情况" />
+          <div class="resource-actions">
+            <el-button v-if="usage === 'unused'" type="primary" :disabled="!supplierReply.trim()" :loading="actionLoading"
+              @click="resolveCancel(selected, true)">同意取消并退款</el-button>
+            <el-button :disabled="!supplierReply.trim()" :loading="actionLoading" @click="resolveCancel(selected, false)">
+              {{ usage === 'used' ? '转售后工单' : usage === 'unknown' ? '保存待核实记录' : '驳回申请' }}
             </el-button>
-            <el-button :loading="actionLoading" @click="resolveCancel(selected, false)">驳回申请</el-button>
-          </template>
+          </div>
         </div>
       </div>
     </el-drawer>

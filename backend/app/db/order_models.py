@@ -51,6 +51,8 @@ class Order(Base):
     user_id: Mapped[str] = mapped_column(String(36))
     trip_id: Mapped[str | None] = mapped_column(String(36))
     client_key: Mapped[str | None] = mapped_column(String(64))
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    departure_date: Mapped[date | None] = mapped_column(Date)
     status: Mapped[str] = mapped_column(String(24), default="pending_payment", server_default="pending_payment")
     fund_status: Mapped[str] = mapped_column(String(16), default="unpaid", server_default="unpaid")
     contact_name: Mapped[str] = mapped_column(String(50))
@@ -96,7 +98,7 @@ class OrderItem(Base):
 
 
 class OrderTraveler(Base):
-    """Only masked identifiers are kept with the order; full PII stays in the profile."""
+    """Optional document identifiers are encrypted at rest and masked in responses."""
 
     __tablename__ = "order_travelers"
 
@@ -170,3 +172,25 @@ class OrderSequence(Base):
 
     day: Mapped[date] = mapped_column(Date, primary_key=True)
     next_value: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+
+
+class DemoPointEvent(Base):
+    __tablename__ = "demo_point_events"
+    __table_args__ = (
+        CheckConstraint("kind IN ('payment', 'refund')", name="ck_demo_point_kind"),
+        Index("ix_demo_points_member", "user_id", "order_id"),
+        Index("ix_demo_points_pending", "posted_at", "order_id"),
+    )
+
+    order_id: Mapped[str] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(12), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(36))
+    amount_fen: Mapped[int]
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OrderDataMigration(Base):
+    __tablename__ = "order_data_migrations"
+
+    name: Mapped[str] = mapped_column(String(50), primary_key=True)

@@ -55,6 +55,7 @@ async def init_db():
     from app.db.trip_version_migration import ensure_trip_version_index
     from app.db.user_role_migration import ensure_user_role_column
     from app.services.ai_dialog import seed_dialog
+    from app.services.demo_points import migrate_old_points
     from app.services.notifications import seed_message_settings
     from app.services.recommendation_delivery import seed_deliveries
 
@@ -68,6 +69,7 @@ async def init_db():
         await conn.run_sync(ensure_trip_version_index)
         await conn.run_sync(ensure_trip_operator_support)
         await conn.run_sync(ensure_order_traveler_ciphertext)
+        await migrate_old_points(conn)
         await seed_message_settings(conn)
         await seed_dialog(conn)
         await seed_deliveries(conn)

@@ -42,6 +42,9 @@ export interface MemberSummary {
 
 export interface PointOverview {
   effective_balance: number
+  demo_balance?: number
+  demo_payments?: number
+  demo_refunds?: number
   as_of: string
   expiring: { order_id: string; remaining_points: number; expires_at: string }[]
 }

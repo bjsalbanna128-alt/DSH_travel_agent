@@ -2,13 +2,13 @@
 
 import json
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from app.db.database import async_session
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from app.schemas.travel_state import AgentExecution, IntercityEstimate
 from app.services.geo import haversine_km
-from app.services.planning_quality import available_days, route_guidance, with_poi_identity
+from app.services.planning_quality import available_days, explicit_departure, route_guidance, with_poi_identity
 from app.services.poi_service import (
     search_attractions_hybrid,
     search_hotels_hybrid,
@@ -22,16 +22,7 @@ logger = logging.getLogger(__name__)
 
 def _travel_date(req: dict) -> date | None:
     """Best-effort departure date so stock can be checked against a real day."""
-    raw = str(req.get("travel_time") or "").strip()
-    candidates = [raw[:10]]
-    if len(raw) >= 7:
-        candidates.append(f"{raw[:7]}-01")
-    for candidate in candidates:
-        try:
-            return date.fromisoformat(candidate)
-        except ValueError:
-            continue
-    return None
+    return explicit_departure(req.get("travel_time"))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -89,6 +80,7 @@ async def attraction_node(state: dict) -> dict:
             preferences=preferences,
             days=days,
             travel_date=travel_date,
+            end_date=travel_date + timedelta(days=days - 1) if travel_date else None,
             session=db,
         )
     all_pois = pois
@@ -148,7 +140,7 @@ async def attraction_node(state: dict) -> dict:
         "scenic_candidates_filtered": len(all_pois) > len(pois) or len(selected) > count,
         "catalog_available": catalog_ok,
         "scenic_pois": [
-            {key: poi[key] for key in ("source", "id", "name", "city") if key in poi}
+            {key: poi[key] for key in ("source", "id", "name", "city", "content_id", "offer") if key in poi}
             for poi in all_pois
         ],
     }
@@ -540,6 +532,7 @@ async def hotel_node(state: dict) -> dict:
             max_price_per_night=hotel_budget if hotel_budget > 0 else 0,
             count=10,
             travel_date=travel_date,
+            end_date=travel_date + timedelta(days=max(0, req.get("days", 1) - 2)) if travel_date else None,
             anchor=anchor,
             session=db,
         )

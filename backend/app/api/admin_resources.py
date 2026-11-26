@@ -142,12 +142,15 @@ async def list_pois(
 
 @router.get("/products/{product_id}/offers", response_model=OfferPage)
 async def list_offers(
-    product_id: str, db: DB, start_date: ServiceDate | None = None,
+    product_id: str, db: WriteDB, start_date: ServiceDate | None = None,
     end_date: ServiceDate | None = None, status: OfferStatus | None = None,
     check_in: ServiceDate | None = None, check_out: ServiceDate | None = None,
     page: Page = 1, page_size: OfferPageSize = 20,
 ):
+    from app.services.orders import expire_due
+
     product = await resources.get_product(db, product_id)
+    await expire_due(db, product_ids={product_id})
     return await resources.list_offers(
         db, product, start=start_date, end=end_date, status=status,
         check_in=check_in, check_out=check_out, offset=(page - 1) * page_size, limit=page_size,
@@ -175,6 +178,6 @@ async def update_offer(product_id: str, service_date: ServiceDate, data: OfferPa
 @router.delete("/products/{product_id}/offers/{service_date}", status_code=204)
 async def remove_offer(product_id: str, service_date: ServiceDate, db: WriteDB):
     product = await resources.get_product(db, product_id, lock=True)
-    await db.delete(await resources.get_offer(db, product, service_date))
+    await resources.delete_offer(db, product, service_date)
     await db.flush()
     return Response(status_code=204)

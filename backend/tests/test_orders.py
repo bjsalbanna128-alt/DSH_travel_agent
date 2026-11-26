@@ -1,12 +1,14 @@
 ﻿"""Order trading: reservation, mock payment, review, cancellation and refunds."""
 
 import asyncio
+from base64 import b64encode
 from datetime import date, datetime, timedelta, timezone
 from secrets import token_hex
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.pool import NullPool
@@ -14,12 +16,14 @@ from sqlalchemy.pool import NullPool
 from app.api import deps, routes
 from app.config import settings
 from app.db import database
-from app.db.models import User
+from app.db.content_models import PlaceContent, PlaceContentProduct
+from app.db.models import Trip, User
 from app.db.order_models import Order, OrderPayment, OrderRefund
 from app.db.resource_models import PriceOffer, Product, Supplier
 from app.main import app
 from app.services import orders as order_service
 from app.services.auth_service import create_access_token
+from app.services.checkout import quote_token
 
 GUEST, OTHER, OPERATOR = "order-guest", "order-other", "order-operator"
 DAY = date.today() + timedelta(days=3)
@@ -43,6 +47,17 @@ async def seed_room(sessions, total=5, sale_fen=50000):
         )
         db.add(product)
         await db.flush()
+        place = PlaceContent(kind="hotel", city="北京", name=f"酒店-{product.id}", status="published")
+        db.add(place)
+        await db.flush()
+        db.add(PlaceContentProduct(content_id=place.id, product_id=product.id))
+        for user in (GUEST, OTHER):
+            trip_id = trip_for(product.id, user)
+            db.add(Trip(id=trip_id, thread_id=trip_id, user_id=user, status="completed", destination="北京",
+                        duration_days=4, travel_request={"travel_time": DAY.isoformat()}, itinerary={
+                            "day_plans": [{"day": i, "hotel": {"name": place.name, "content_id": place.id}}
+                                          for i in range(1, 4)],
+                        }))
         for offset in range(3):
             db.add(PriceOffer(
                 product_id=product.id, service_date=DAY + timedelta(days=offset),
@@ -61,20 +76,29 @@ async def seed_users(sessions):
         ])
 
 
-def body(product_id, quantity=1, nights=1):
+def trip_for(product_id, user):
+    return str(uuid5(NAMESPACE_URL, f"{product_id}/{user}"))
+
+
+def body(product_id, quantity=1, nights=1, user=GUEST, sale=50000):
+    trip_id = trip_for(product_id, user)
     return {
+        "trip_id": trip_id,
         "contact_name": "张三", "contact_phone": "13800000000",
         "travelers": [{"name": "张三", "document_type": "身份证", "document_number": "110101199001010011"}],
         "selected": [{
             "kind": "hotel", "product_id": product_id,
             "check_in": DAY.isoformat(), "check_out": (DAY + timedelta(days=nights)).isoformat(),
             "quantity": quantity,
+            "quotes": [{"service_date": day.isoformat(), "token": quote_token(trip_id, "hotel", product_id, day, sale)}
+                       for day in (DAY + timedelta(days=n) for n in range(nights))],
         }],
     }
 
 
 async def create(sessions, client, product_id, **kwargs):
-    return client.post(API, json=body(product_id, **kwargs), headers=auth(GUEST))
+    return client.post(API, json=body(product_id, **kwargs),
+                       headers={**auth(GUEST), "Idempotency-Key": str(uuid4())})
 
 
 async def stock_row(sessions, product_id, day=DAY):
@@ -149,7 +173,7 @@ async def check_expired_order_is_closed(sessions, client):
                        headers=auth(GUEST))
     assert late.status_code == 409, late.text
     async with sessions.begin() as db:
-        assert await order_service.expire_due(db) == 1
+        assert await order_service.expire_due(db) == 0
     offer = await stock_row(sessions, product_id)
     assert offer.reserved_quantity == 0
     async with sessions() as db:
@@ -178,14 +202,17 @@ async def check_reject_refunds_and_releases(sessions, client):
     product_id = await seed_room(sessions)
     order = (await create(sessions, client, product_id)).json()
     client.post(f"{API}/{order['id']}/payments", json={"idempotency_key": "p"}, headers=auth(GUEST))
-    rejected = client.post(f"{ADMIN}/{order['id']}/reject", json={"reason": "供应商无法供给"},
+    rejected = client.post(f"{ADMIN}/{order['id']}/reject", json={
+        "reason": "供应商无法供给", "category": "stockout",
+        "items": [{"product_id": product_id, "service_date": DAY.isoformat()}],
+    },
                            headers=auth(OPERATOR))
     assert rejected.status_code == 200, rejected.text
     payload = rejected.json()
     assert payload["status"] == "cancelled" and payload["fund_status"] == "refunded"
     assert payload["review_note"] == "供应商无法供给"
     offer = await stock_row(sessions, product_id)
-    assert offer.reserved_quantity == 0
+    assert offer.reserved_quantity == 0 and offer.status == "stopped"
 
 
 async def check_cancel_request_flow(sessions, client):
@@ -198,12 +225,12 @@ async def check_cancel_request_flow(sessions, client):
                             headers=auth(GUEST))
     assert requested.json()["status"] == "cancel_requested"
     declined = client.post(f"{ADMIN}/{order['id']}/cancel-request",
-                           json={"approve": False, "note": "供应商暂不同意"},
+                           json={"approve": False, "note": "供应商暂不同意", "usage": "unused"},
                            headers=auth(OPERATOR))
     assert declined.json()["status"] == "confirmed"
     client.post(f"{API}/{order['id']}/cancel-request", json={"reason": "行程变化"}, headers=auth(GUEST))
     approved = client.post(f"{ADMIN}/{order['id']}/cancel-request",
-                           json={"approve": True, "note": "酒店已同意退订"}, headers=auth(OPERATOR))
+                           json={"approve": True, "note": "酒店已同意退订", "usage": "unused"}, headers=auth(OPERATOR))
     payload = approved.json()
     assert payload["status"] == "cancelled" and payload["fund_status"] == "refunded"
     offer = await stock_row(sessions, product_id)
@@ -215,7 +242,8 @@ async def check_oversell_is_rejected(sessions, client):
     product_id = await seed_room(sessions, total=1)
     first = await create(sessions, client, product_id, quantity=1)
     assert first.status_code == 201
-    second = client.post(API, json=body(product_id), headers=auth(OTHER))
+    second = client.post(API, json=body(product_id, user=OTHER),
+                         headers={**auth(OTHER), "Idempotency-Key": "other-buyer"})
     assert second.status_code == 409, second.text
     assert second.json()["detail"]["items"][0]["reason"] == "sold_out"
     async with sessions() as db:
@@ -257,6 +285,7 @@ def sessions(tmp_path, monkeypatch):
     for module in (deps, routes):
         monkeypatch.setattr(module, "async_session", factory)
     monkeypatch.setattr(settings, "jwt_secret_key", token_hex(32))
+    monkeypatch.setattr(settings, "pii_encryption_key", SecretStr(b64encode(b"x" * 32).decode()))
     asyncio.run(database.init_db())
     yield factory
     asyncio.run(engine.dispose())

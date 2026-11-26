@@ -1,60 +1,34 @@
-"""Delete mock points created by simulated orders.
-
-Mock payments and refunds use point event keys prefixed with ``mock-``; this
-script removes those transactions and rebuilds affected balances from the lots.
-
-Usage: python -m scripts.clean_mock_points [--dry-run]
-"""
+"""Preview or clear isolated demo points. The default operation is read-only."""
 
 import argparse
 import asyncio
-import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 
 from app.db import database
-from app.db.membership_models import PointAccount, PointLot, PointTransaction
+from app.db.order_models import DemoPointEvent
+from app.services.demo_points import overview
 
 
-async def main(dry_run: bool) -> None:
-    async with database.async_session() as db:
-        transactions = (await db.scalars(select(PointTransaction))).all()
-        mock_transactions = [row for row in transactions if str(row.event_key).startswith("mock-")]
-        lots = (await db.scalars(select(PointLot))).all()
-        lots_with_refunds = {
-            row.order_id for row in transactions
-            if str(row.event_key).startswith("mock-") and row.kind == "refund"
-        }
-        mock_lots = [
-            lot for lot in lots
-            if lot.order_id in {tx.order_id for tx in mock_transactions} and lot.order_id not in lots_with_refunds
-        ]
-        print(f"拟删除模拟积分流水 {len(mock_transactions)} 条，模拟订单积分批次 {len(mock_lots)} 条")
-        if dry_run:
-            return
-        for tx in mock_transactions:
-            await db.delete(tx)
-        for lot in mock_lots:
-            await db.delete(lot)
-        await db.flush()
-        accounts = (await db.scalars(select(PointAccount))).all()
-        for account in accounts:
-            remaining = sum(
-                max(lot.remaining_points, 0)
-                for lot in (await db.scalars(
-                    select(PointLot).where(PointLot.user_id == account.user_id)
-                )).all()
-            )
-            account.book_balance = remaining
-        await db.commit()
-    print("模拟积分已清理，余额已按剩余批次重算")
+async def main(apply: bool = False, sessions=None) -> None:
+    if sessions is None:
+        sessions = database.async_session
+    async with sessions.begin() as db:
+        if apply:
+            await database.reserve_write(db)
+            if db.get_bind().dialect.name == "postgresql":
+                from sqlalchemy import text
+                await db.execute(text("LOCK TABLE demo_point_events IN SHARE ROW EXCLUSIVE MODE"))
+        result = await overview(db)
+        count = await db.scalar(select(func.count()).select_from(DemoPointEvent))
+        print(f"模拟事件 {count} 条，清理后演示可用余额减少 {result['balance']} 分，正式积分不变。")
+        if apply:
+            await db.execute(delete(DemoPointEvent))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="清理模拟支付产生的积分")
-    parser.add_argument("--dry-run", action="store_true", help="只统计不删除")
-    args = parser.parse_args()
-    asyncio.run(main(args.dry_run))
+    parser = argparse.ArgumentParser(description="预览或清理独立的演示积分账本")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--dry-run", action="store_true", help="只预览（默认）")
+    mode.add_argument("--apply", action="store_true", help="执行清理")
+    asyncio.run(main(parser.parse_args().apply))

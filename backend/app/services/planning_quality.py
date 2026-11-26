@@ -57,7 +57,7 @@ def _identity(item):
 
 def with_poi_identity(item, known):
     """Only copy source and city from a candidate that actually came from POI search."""
-    clean = {key: value for key, value in item.items() if key not in ("source", "city")}
+    clean = {key: value for key, value in item.items() if key not in ("source", "city", "content_id", "offer")}
     item_id = clean.get("id")
     name = name_key(clean.get("name") or "")
     by_name = [candidate for candidate in known if name_key(candidate.get("name") or "") == name]
@@ -68,10 +68,6 @@ def with_poi_identity(item, known):
         else:
             same_id = [candidate for candidate in known if candidate.get("id") == item_id]
             if same_id:
-                # 模型把 id 原样抄回来了：仍要把可售信息补上，不能直接返回。
-                for extra in ("source", "city", "content_id", "offer"):
-                    if same_id[0].get(extra):
-                        clean[extra] = same_id[0][extra]
                 return clean
     identities = {_identity(candidate): candidate for candidate in by_name if _identity(candidate)}
     if len(identities) == 1:

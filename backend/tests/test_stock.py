@@ -17,6 +17,7 @@ from app.config import settings
 from app.db import database
 from app.db import database as database_module
 from app.db.models import User
+from app.db.order_models import Order
 from app.db.resource_models import OfferAllocation, PriceOffer, Product, Supplier
 from app.main import app
 from app.schemas.admin_resources import OfferPatch
@@ -118,6 +119,8 @@ async def check_expired_reservation_is_reclaimed(sessions, client):
     product_id = await seed_offer(sessions, total=1)
     past = datetime.now(timezone.utc) - timedelta(minutes=1)
     async with sessions.begin() as db:
+        db.add(Order(id="order-d", order_no="test-expiry", user_id="fixture",
+                     contact_name="测试", contact_phone="000", total_sale_fen=0, total_cost_fen=0, expires_at=past))
         await stock.reserve(db, "order-d", [(product_id, DAY, 1)], now=past - timedelta(minutes=20))
     async with sessions.begin() as db:
         assert await stock.expire_due(db) == 1

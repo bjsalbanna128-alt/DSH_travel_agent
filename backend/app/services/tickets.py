@@ -53,12 +53,12 @@ async def tourist_list(db: AsyncSession, submitter_id: str, offset: int, limit: 
     return ResourcePage[TicketSummary](items=[TicketSummary.model_validate(row) for row in tickets], total=total)
 
 
-async def create_ticket(db: AsyncSession, submitter_id: str, form: SubmitTicket) -> TicketDetail:
+async def create_ticket(db: AsyncSession, submitter_id: str, form: SubmitTicket, *, order_id: str | None = None) -> TicketDetail:
     ticket_id = new_id()
     now = utc_now()
     ticket = Ticket(
         id=ticket_id, number="T-" + ticket_id.replace("-", "").upper(), submitter_id=submitter_id,
-        created_at=now, updated_at=now, **form.model_dump(),
+        created_at=now, updated_at=now, order_id=order_id, **form.model_dump(),
     )
     db.add(ticket)
     await db.flush()

@@ -14,6 +14,7 @@ export interface ApiFieldIssue {
 }
 
 export class AdminRequestError extends Error {
+  conflicts: { product_id?: string; service_date?: string; reason: string }[] = []
   readonly dates: string[]
   readonly issues: ApiFieldIssue[]
   readonly status: number
@@ -53,10 +54,12 @@ export async function readApiError(res: Response): Promise<AdminRequestError> {
         ? `（${detail.missing.join('、')}）` : '')
       : validation.length ? validation.map(issue => `${issue.path.at(-1)}：${issue.message}`).join('；')
     : `请求失败（${res.status}），请重试。`
-  return new AdminRequestError(
+  const failure = new AdminRequestError(
     message, Array.isArray(detail?.dates) ? detail.dates : [],
     Array.isArray(detail?.errors) ? detail.errors : validation, res.status,
   )
+  if (Array.isArray(detail?.items)) failure.conflicts = detail.items
+  return failure
 }
 
 function query(params: Query): string {

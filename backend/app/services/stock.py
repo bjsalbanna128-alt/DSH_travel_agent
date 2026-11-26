@@ -54,21 +54,8 @@ def merge_entries(entries: Iterable[Entry]) -> list[Entry]:
     return [(product_id, service_date, quantity) for (product_id, service_date), quantity in sorted(merged.items())]
 
 
-async def _release_expired(db: AsyncSession, product_id: str, service_date: date, now: datetime) -> None:
-    """Reclaim expired reservations on this offer before judging availability."""
-    stale = (await db.scalars(select(OfferAllocation).where(
-        OfferAllocation.product_id == product_id,
-        OfferAllocation.service_date == service_date,
-        OfferAllocation.state == "reserved",
-        OfferAllocation.expires_at.is_not(None),
-        OfferAllocation.expires_at <= now,
-    ))).all()
-    for allocation in stale:
-        await _release_one(db, allocation)
-
-
 async def _release_one(db: AsyncSession, allocation: OfferAllocation) -> None:
-    await db.execute(
+    result = await db.execute(
         update(PriceOffer)
         .where(
             PriceOffer.product_id == allocation.product_id,
@@ -77,6 +64,8 @@ async def _release_one(db: AsyncSession, allocation: OfferAllocation) -> None:
         )
         .values(reserved_quantity=PriceOffer.reserved_quantity - allocation.quantity)
     )
+    if result.rowcount != 1:
+        raise StockUnavailable([_missing(allocation.product_id, allocation.service_date)])
     allocation.state = "released"
     allocation.expires_at = None
 
@@ -91,10 +80,9 @@ async def reserve(
     conflicts: list[dict] = []
 
     for product_id, service_date, quantity in merged:
-        await _release_expired(db, product_id, service_date, clock)
         offer = await db.scalar(select(PriceOffer).where(
             PriceOffer.product_id == product_id, PriceOffer.service_date == service_date,
-        ).with_for_update())
+        ).with_for_update().execution_options(populate_existing=True))
         if offer is None:
             conflicts.append({"product_id": product_id, "service_date": service_date.isoformat(),
                               "reason": "unquoted"})
@@ -142,14 +130,54 @@ async def reserve(
     return allocations
 
 
-async def confirm(db: AsyncSession, order_id: str, *, now: datetime | None = None) -> int:
+def _missing(product_id, day):
+    return {"product_id": product_id, "service_date": day.isoformat(), "reason": "reservation_missing"}
+
+
+async def _allocations(db, order_id, state):
+    return (await db.scalars(select(OfferAllocation).where(
+        OfferAllocation.order_id == order_id, OfferAllocation.state == state,
+    ).order_by(OfferAllocation.product_id, OfferAllocation.service_date).with_for_update())).all()
+
+
+def _reconcile(allocations, expected):
+    actual = {(row.product_id, row.service_date): row.quantity for row in allocations}
+    wanted = {(product_id, day): quantity for product_id, day, quantity in merge_entries(expected)}
+    issues = [_missing(*key) for key in sorted(wanted.keys() | actual.keys()) if wanted.get(key) != actual.get(key)]
+    if issues:
+        raise StockUnavailable(issues)
+
+
+async def _verify_reserved(db, allocations):
+    issues = []
+    for row in allocations:
+        offer = await db.get(PriceOffer, (row.product_id, row.service_date),
+                             with_for_update=True, populate_existing=True)
+        if offer is None or offer.reserved_quantity < row.quantity:
+            issues.append(_missing(row.product_id, row.service_date))
+    if issues:
+        raise StockUnavailable(issues)
+
+
+async def protect_paid(db, order_id, expected):
+    allocations = await _allocations(db, order_id, "reserved")
+    _reconcile(allocations, expected)
+    await _verify_reserved(db, allocations)
+    for row in allocations:
+        row.expires_at = None
+
+
+async def confirm(db: AsyncSession, order_id: str, *, now: datetime | None = None, expected=None) -> int:
     """Turn this order's reservations into confirmed occupancy; idempotent."""
-    clock = _now(now)
-    allocations = (await db.scalars(select(OfferAllocation).where(
-        OfferAllocation.order_id == order_id,
-        OfferAllocation.state == "reserved",
-        OfferAllocation.expires_at > clock,
-    ))).all()
+    allocations = await _allocations(db, order_id, "reserved")
+    if expected is not None:
+        _reconcile(allocations, expected)
+    else:
+        clock = _now(now)
+        allocations = [row for row in allocations if row.expires_at is None or (
+            row.expires_at.replace(tzinfo=row.expires_at.tzinfo or timezone.utc) > clock
+        )]
+    await _verify_reserved(db, allocations)
     for allocation in allocations:
         result = await db.execute(
             update(PriceOffer)
@@ -177,10 +205,7 @@ async def confirm(db: AsyncSession, order_id: str, *, now: datetime | None = Non
 
 async def release(db: AsyncSession, order_id: str, *, now: datetime | None = None) -> int:
     """Release only still-reserved rows for this order; repeated calls are no-ops."""
-    allocations = (await db.scalars(select(OfferAllocation).where(
-        OfferAllocation.order_id == order_id,
-        OfferAllocation.state == "reserved",
-    ))).all()
+    allocations = await _allocations(db, order_id, "reserved")
     for allocation in allocations:
         await _release_one(db, allocation)
     await db.flush()
@@ -189,10 +214,7 @@ async def release(db: AsyncSession, order_id: str, *, now: datetime | None = Non
 
 async def release_confirmed(db: AsyncSession, order_id: str, *, now: datetime | None = None) -> int:
     """Give back occupancy that was already confirmed (cancellation after review)."""
-    allocations = (await db.scalars(select(OfferAllocation).where(
-        OfferAllocation.order_id == order_id,
-        OfferAllocation.state == "confirmed",
-    ))).all()
+    allocations = await _allocations(db, order_id, "confirmed")
     for allocation in allocations:
         result = await db.execute(
             update(PriceOffer)
@@ -203,21 +225,15 @@ async def release_confirmed(db: AsyncSession, order_id: str, *, now: datetime | 
             )
             .values(confirmed_quantity=PriceOffer.confirmed_quantity - allocation.quantity)
         )
-        if result.rowcount == 1:
-            allocation.state = "released"
+        if result.rowcount != 1:
+            raise StockUnavailable([_missing(allocation.product_id, allocation.service_date)])
+        allocation.state = "released"
     await db.flush()
     return len(allocations)
 
 
 async def expire_due(db: AsyncSession, *, now: datetime | None = None) -> int:
-    """Release reservations whose payment window has passed."""
-    clock = _now(now)
-    allocations = (await db.scalars(select(OfferAllocation).where(
-        OfferAllocation.state == "reserved",
-        OfferAllocation.expires_at.is_not(None),
-        OfferAllocation.expires_at <= clock,
-    ))).all()
-    for allocation in allocations:
-        await _release_one(db, allocation)
-    await db.flush()
-    return len(allocations)
+    """Expire entire unpaid orders through the trading state transition."""
+    from app.services.orders import expire_due as expire_orders
+
+    return await expire_orders(db, now=now)

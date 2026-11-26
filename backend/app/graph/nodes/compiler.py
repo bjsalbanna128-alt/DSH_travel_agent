@@ -2,16 +2,19 @@
 
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
+from app.db import database
+from sqlalchemy.exc import SQLAlchemyError
 from langgraph.types import interrupt
 
 from app.schemas.travel_state import (
     AgentExecution, DayPlan, Hotel, Itinerary, ApprovalRequest,
 )
 from app.services.itinerary_costs import estimate_day_cost, traveler_count
-from app.services.planning_quality import annotate, assess, route_guidance, with_poi_identity
+from app.services.planning_quality import annotate, assess, explicit_departure, route_guidance, with_poi_identity
+from app.services.sellability import annotate_offers, reclaim_expired_holds
 from app.services.transport_plan import (
     build_intraday_transports, intercity_median_total, parse_intercity_estimates,
 )
@@ -55,45 +58,13 @@ COMPILER_SYSTEM_PROMPT = """你是一个行程整合专家。将所有Agent的�
 
 
 def _resolve_start_date(text: str):
-    """Best-effort departure date: ISO, YYYY-MM, or 'M月D日' (next occurrence)."""
-    import re
-    from datetime import date
-
-    raw = (text or "").strip()
-    for candidate in (raw[:10], f"{raw[:7]}-01"):
-        try:
-            return date.fromisoformat(candidate)
-        except ValueError:
-            continue
-    match = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", raw)
-    if match:
-        today = date.today()
-        try:
-            resolved = date(today.year, int(match.group(1)), int(match.group(2)))
-        except ValueError:
-            return None
-        return resolved if resolved >= today else date(today.year + 1, resolved.month, resolved.day)
-    return None
+    return explicit_departure(text)
 
 
 def _apply_day_dates(day_plans: list[DayPlan], travel_time: str) -> None:
     """Fill each day's absolute date from the departure date plus its offset."""
-    from datetime import timedelta
-
     start = _resolve_start_date(travel_time)
-
-    def _valid(value: str) -> bool:
-        from datetime import date as _date
-        try:
-            _date.fromisoformat(str(value)[:10])
-            return True
-        except ValueError:
-            return False
-
     for plan in day_plans:
-        if _valid(plan.date):
-            continue
-        # 「Day 1」这类不是日期的值直接丢弃，避免下游按日期查价时拿到脏数据。
         plan.date = (start + timedelta(days=max(0, plan.day - 1))).isoformat() if start else ""
 
 
@@ -101,17 +72,33 @@ def _attach_hotel_offer(hotel, known: list) -> dict | None:
     """酒店也按名称回填可售信息：LLM 逐日计划里的酒店是它自己复述的，不带 offer。"""
     if not isinstance(hotel, dict):
         return None
-    name = str(hotel.get("name") or "").strip()
-    if not name:
-        return hotel
-    for candidate in known:
-        if str(candidate.get("name") or "").strip() == name and candidate.get("offer"):
-            merged = dict(hotel)
-            for extra in ("id", "content_id", "offer", "area"):
-                if candidate.get(extra):
-                    merged[extra] = candidate[extra]
-            return merged
-    return hotel
+    return with_poi_identity(hotel, known)
+
+
+async def _refresh_day_offers(plans, duration):
+    entries = []
+    for plan in plans:
+        day = date.fromisoformat(plan.date) if plan.date else None
+        entries.extend((item, "attraction", day) for item in plan.attractions if item.content_id)
+        if plan.hotel:
+            plan.hotel.offer = None
+            if plan.day < duration and plan.hotel.content_id:
+                entries.append((plan.hotel, "hotel", day))
+    if not entries:
+        return
+    for item, _, _ in entries:
+        item.offer = None
+    try:
+        async with database.async_session() as db:
+            await reclaim_expired_holds(db)
+            groups = {(kind, day) for _, kind, day in entries}
+            for kind, day in groups:
+                records = [item for item, entry_kind, entry_day in entries if (entry_kind, entry_day) == (kind, day)]
+                values = await annotate_offers(db, [item.model_dump() for item in records], kind=kind, travel_date=day)
+                for item, value in zip(records, values):
+                    item.offer = value["offer"]
+    except SQLAlchemyError:
+        logger.warning("Could not refresh day-specific offers", exc_info=True)
 
 
 def _with_catalog_note(overall_tips: str, state: dict) -> str:
@@ -255,6 +242,7 @@ async def itinerary_compiler_node(state: dict) -> dict:
     day_plans.sort(key=lambda plan: plan.day)
     _apply_day_dates(day_plans, str(req.get("travel_time") or ""))
     _fill_missing_hotels(day_plans, state.get("hotels") or [])
+    await _refresh_day_offers(day_plans, days)
     _attach_intraday_transports(day_plans)
     people = traveler_count(req)
     total_estimate = sum(estimate_day_cost(plan.model_dump(), people) for plan in day_plans)

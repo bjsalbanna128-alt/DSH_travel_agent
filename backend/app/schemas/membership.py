@@ -96,6 +96,12 @@ class PointOverview(BaseModel):
     expiring: list[ExpiringLot]
 
 
+class TouristPointOverview(PointOverview):
+    demo_balance: int
+    demo_payments: int
+    demo_refunds: int
+
+
 class PointEntry(BaseModel, from_attributes=True):
     id: str
     kind: PointKind

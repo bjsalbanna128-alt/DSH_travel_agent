@@ -149,7 +149,7 @@ async def create_content(db: AsyncSession, data: ContentCreate, actor_id: str) -
 async def update_content(
     db: AsyncSession, content_id: str, patch: ContentPatch, actor_id: str,
 ) -> ContentResponse:
-    row = await db.get(PlaceContent, content_id)
+    row = await db.get(PlaceContent, content_id, with_for_update=True)
     if row is None:
         raise HTTPException(404, "内容不存在")
     for name, value in patch.model_dump(exclude_unset=True).items():
@@ -160,11 +160,13 @@ async def update_content(
         await db.flush()
     except IntegrityError as error:
         raise HTTPException(409, "该城市下已存在同名内容，请先编辑已有条目。") from error
+    if row.status == "published":
+        await queue_vector_sync(db)
     return await get_content(db, content_id)
 
 
 async def publish_content(db: AsyncSession, content_id: str, actor_id: str) -> ContentResponse:
-    row = await db.get(PlaceContent, content_id)
+    row = await db.get(PlaceContent, content_id, with_for_update=True)
     if row is None:
         raise HTTPException(404, "内容不存在")
     missing = [label for field, label in PUBLISH_REQUIRED.items()
@@ -178,24 +180,24 @@ async def publish_content(db: AsyncSession, content_id: str, actor_id: str) -> C
     row.updated_by = actor_id
     row.updated_at = _now()
     await db.flush()
-    await _sync_quietly(db)
+    await queue_vector_sync(db)
     return await get_content(db, content_id)
 
 
 async def unpublish_content(db: AsyncSession, content_id: str, actor_id: str) -> ContentResponse:
-    row = await db.get(PlaceContent, content_id)
+    row = await db.get(PlaceContent, content_id, with_for_update=True)
     if row is None:
         raise HTTPException(404, "内容不存在")
     row.status = "unpublished"
     row.updated_by = actor_id
     row.updated_at = _now()
     await db.flush()
-    await _sync_quietly(db)
+    await queue_vector_sync(db)
     return await get_content(db, content_id)
 
 
 async def delete_content(db: AsyncSession, content_id: str) -> None:
-    row = await db.get(PlaceContent, content_id)
+    row = await db.get(PlaceContent, content_id, with_for_update=True)
     if row is None:
         raise HTTPException(404, "内容不存在")
     bound = await db.scalar(
@@ -205,20 +207,26 @@ async def delete_content(db: AsyncSession, content_id: str) -> None:
         raise HTTPException(409, "该内容仍绑定商品，请先解除绑定再删除。")
     await db.delete(row)
     await db.flush()
+    await queue_vector_sync(db)
 
 
 async def bind_products(
     db: AsyncSession, content_id: str, data: BindProducts, actor_id: str,
 ) -> ContentResponse:
-    row = await db.get(PlaceContent, content_id)
+    from app.services.scenic_restrictions import city_key
+
+    row = await db.get(PlaceContent, content_id, with_for_update=True)
     if row is None:
         raise HTTPException(404, "内容不存在")
     wanted = list(dict.fromkeys(data.product_ids))
     if wanted:
-        found = set((await db.scalars(select(Product.id).where(Product.id.in_(wanted)))).all())
+        product_type = {"hotel": "hotel_room", "attraction": "attraction_ticket"}[row.kind]
+        products = await db.scalars(select(Product).where(Product.id.in_(wanted)))
+        found = {product.id for product in products
+                 if product.type == product_type and city_key(product.city) == city_key(row.city)}
         missing = [product_id for product_id in wanted if product_id not in found]
         if missing:
-            raise HTTPException(422, {"message": "以下商品不存在。", "product_ids": missing})
+            raise HTTPException(422, {"message": "部分商品不存在，或品类、城市与地点不一致。", "product_ids": missing})
     await db.execute(delete(PlaceContentProduct).where(PlaceContentProduct.content_id == content_id))
     for product_id in wanted:
         db.add(PlaceContentProduct(content_id=content_id, product_id=product_id))
@@ -228,14 +236,40 @@ async def bind_products(
     return await get_content(db, content_id)
 
 
-async def _sync_quietly(db: AsyncSession) -> None:
-    """发布/下架后顺手同步向量；同步失败不阻断发布，由运营手动重试。"""
-    import logging
+async def queue_vector_sync(db: AsyncSession) -> None:
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+    from app.db.content_models import ContentVectorJob
 
+    insert = sqlite_insert if db.get_bind().dialect.name == "sqlite" else pg_insert
+    await db.execute(insert(ContentVectorJob).values(id=1, pending=True, failed=False)
+                     .on_conflict_do_update(index_elements=["id"], set_={"pending": True}))
+
+
+async def vector_status(db):
+    from app.db.content_models import ContentVectorJob
+
+    job = await db.get(ContentVectorJob, 1)
+    return {"pending": bool(job and job.pending), "failed": bool(job and job.failed)}
+
+
+async def process_vector_job(db, *, force=False, rebuild=False):
+    import logging
+    from app.db.content_models import ContentVectorJob
+
+    if force:
+        await queue_vector_sync(db)
+    job = await db.get(ContentVectorJob, 1, with_for_update=True)
+    if job is None or not job.pending:
+        return None
     try:
-        await sync_vectors(db)
-    except Exception:  # pragma: no cover - 依赖外部向量库
-        logging.getLogger(__name__).warning("向量同步失败，可手动重试", exc_info=True)
+        result = await sync_vectors(db, rebuild=rebuild)
+    except Exception as error:
+        job.failed = True
+        logging.getLogger(__name__).warning("向量同步失败，将重试 (%s)", type(error).__name__)
+        return None
+    job.pending, job.failed = False, False
+    return result
 
 
 async def sync_vectors(db: AsyncSession, *, rebuild: bool = False) -> SyncResult:
@@ -269,33 +303,11 @@ async def sellable_products(
     db: AsyncSession, content_ids: list[str], service_date,
 ) -> dict[str, dict]:
     """Cheapest sellable product per content on a given day."""
-    if not content_ids:
-        return {}
-    rows = (await db.execute(
-        select(PlaceContentProduct.content_id, Product.id, PriceOffer)
-        .join(Product, Product.id == PlaceContentProduct.product_id)
-        .join(Supplier, Supplier.id == Product.supplier_id)
-        .join(PriceOffer, PriceOffer.product_id == Product.id)
-        .where(
-            PlaceContentProduct.content_id.in_(content_ids),
-            Product.status == "on_shelf",
-            Supplier.status == "active",
-            PriceOffer.status == "available",
-            PriceOffer.service_date == service_date,
-            PriceOffer.total_quantity.is_not(None),
-        )
-    )).all() if service_date is not None else []
+    from app.services.sellability import eligible_offers
 
-    best: dict[str, dict] = {}
-    for content_id, product_id, offer in rows:
-        remaining = offer.total_quantity - offer.reserved_quantity - offer.confirmed_quantity
-        if remaining <= 0:
-            continue
-        candidate = {
-            "product_id": product_id, "price_fen": offer.sale_fen,
-            "remaining": remaining, "sellable": True,
-        }
-        current = best.get(content_id)
-        if current is None or candidate["price_fen"] < current["price_fen"]:
-            best[content_id] = candidate
-    return best
+    if service_date is None:
+        return {}
+    rows = await eligible_offers(db, content_ids, service_date)
+    return {content_id: {"product_id": row.product_id, "price_fen": row.sale_fen,
+                         "remaining": row.remaining_quantity, "sellable": True}
+            for content_id, row in rows.items()}

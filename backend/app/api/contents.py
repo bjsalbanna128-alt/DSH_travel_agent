@@ -1,6 +1,6 @@
 """Operator routes for the content layer (attractions and hotels)."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from app.api.deps import CurrentOperator, DbSession as DB, WriteDbSession as WriteDB
 from app.api.support import Page
@@ -34,7 +34,16 @@ async def create_content(data: ContentCreate, db: WriteDB, operator: CurrentOper
 
 @router.post("/sync-vectors", response_model=SyncResult)
 async def sync_vectors(db: WriteDB, rebuild: bool = False):
-    return await contents.sync_vectors(db, rebuild=rebuild)
+    result = await contents.process_vector_job(db, force=True, rebuild=rebuild)
+    if result is None:
+        await db.commit()
+        raise HTTPException(503, "向量同步暂时失败，已保留待重试任务。")
+    return result
+
+
+@router.get("/vector-status")
+async def vector_status(db: DB):
+    return await contents.vector_status(db)
 
 
 @router.get("/{content_id}", response_model=ContentResponse)

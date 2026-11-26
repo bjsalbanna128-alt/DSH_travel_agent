@@ -176,10 +176,13 @@ async function syncVectors(rebuild: boolean) {
     ElMessage.success(`向量同步完成：新增 ${result.added}，更新 ${result.updated}，移除 ${result.removed}`)
   } catch (failure) {
     ElMessage.error(adminError(failure))
+  } finally {
+    await loadVectorStatus()
   }
 }
 
-onMounted(load)
+const { data: vectorStatus, load: loadVectorStatus } = useAdminQuery(contentsApi.vectorStatus)
+onMounted(() => { void load(); void loadVectorStatus() })
 </script>
 
 <template>
@@ -192,6 +195,8 @@ onMounted(load)
         <el-button type="primary" @click="openCreate">新建内容</el-button>
       </div>
     </header>
+    <el-alert v-if="vectorStatus?.pending" :title="vectorStatus.failed ? '向量同步失败，后台会重试。' : '向量同步待处理。'"
+      :type="vectorStatus.failed ? 'warning' : 'info'" :closable="false" />
     <div class="resource-panel">
       <form class="resource-toolbar" @submit.prevent="search">
         <el-select v-model="filters.kind" placeholder="全部类型" clearable aria-label="类型筛选">

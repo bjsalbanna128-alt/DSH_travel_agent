@@ -159,6 +159,11 @@ async function deleteTraveler(row: Traveler) {
       </ul>
     </section>
     <MemberPointsOverview v-if="points" :points="points" />
+    <section v-if="points" class="resource-panel resource-stack" aria-label="演示积分">
+      <h2>演示积分</h2>
+      <p>{{ points.demo_balance ?? 0 }} 分 · 模拟支付 {{ points.demo_payments ?? 0 }} 笔 · 模拟退款 {{ points.demo_refunds ?? 0 }} 笔</p>
+      <small>仅用于演示交易，会员权益按正式积分计算。</small>
+    </section>
     <div v-else-if="pointsError" class="resource-panel resource-stack">
       <el-alert :title="pointsError" type="error" :closable="false" show-icon />
       <div><el-button @click="loadPoints">重试读取积分</el-button></div>
