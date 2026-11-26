@@ -2,7 +2,12 @@
 import { computed, onMounted, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { useRoute, type RouteLocationRaw } from 'vue-router'
 import { adminError } from '../api/adminResources'
-import { getDashboard, type AdminDashboard } from '../api/dashboard'
+import {
+  formatYuan, getDashboard, getDashboardTrends,
+  type AdminDashboard, type AdminTrends,
+} from '../api/dashboard'
+import BusinessTrendChart from '../components/BusinessTrendChart.vue'
+import CategoryBars from '../components/CategoryBars.vue'
 import { useAuthStore } from '../stores/auth'
 import { useInboxStore } from '../stores/inbox'
 import { categoryLabels } from '../types/support'
@@ -82,6 +87,75 @@ function schedule(force = false) {
   timer = window.setTimeout(onForeground, POLL_MS)
 }
 
+const trends = shallowRef<AdminTrends>()
+const trendDays = ref<7 | 30>(7)
+const trendLoading = ref(false)
+const trendError = ref('')
+let trendPending: AbortController | undefined
+
+async function loadTrends(days: 7 | 30 = trendDays.value) {
+  trendPending?.abort()
+  const request = new AbortController()
+  trendPending = request
+  trendLoading.value = true
+  try {
+    const payload = await getDashboardTrends(days, request.signal)
+    if (request.signal.aborted) return
+    trends.value = payload
+    trendError.value = ''
+  } catch (failure) {
+    if (!request.signal.aborted) trendError.value = adminError(failure)
+  } finally {
+    if (trendPending === request) {
+      trendPending = undefined
+      trendLoading.value = false
+    }
+  }
+}
+
+function switchTrendDays(value: string | number | boolean | undefined) {
+  trendDays.value = value === 30 ? 30 : 7
+  void loadTrends()
+}
+
+const readyRate = computed(() => {
+  const stats = trends.value?.totals
+  if (!stats?.fulfillment_total) return '—'
+  return `${Math.round((trends.value!.series.reduce((sum, row) => sum + row.fulfillment_ready, 0)
+    / stats.fulfillment_total) * 100)}%`
+})
+
+const keyNumbers = computed(() => {
+  const stats = trends.value?.totals
+  if (!stats) return []
+  return [
+    { label: '净收款', value: formatYuan(stats.net_fen), negative: stats.net_fen < 0 },
+    { label: '订单数', value: stats.orders.toLocaleString() },
+    { label: '客单价', value: formatYuan(stats.avg_order_fen) },
+    { label: '履约就绪率', value: readyRate.value },
+  ]
+})
+
+const trendRows = computed(() => {
+  const payload = trends.value
+  if (!payload) return []
+  return [...payload.series].reverse().map(row => ({
+    ...row,
+    isToday: row.date === payload.today,
+  }))
+})
+
+const trendsEmpty = computed(() => {
+  const stats = trends.value?.totals
+  if (!stats) return false
+  return stats.paid_fen === 0 && stats.refund_fen === 0 && stats.fulfillment_total === 0
+})
+
+function handleRefresh() {
+  schedule(true)
+  void loadTrends()
+}
+
 function onForeground() { schedule() }
 
 function clear() {
@@ -104,9 +178,11 @@ onMounted(() => {
   document.addEventListener('visibilitychange', onForeground)
   window.addEventListener('focus', onForeground)
   schedule()
+  void loadTrends()
 })
 onScopeDispose(() => {
   mounted = false
+  trendPending?.abort()
   document.removeEventListener('visibilitychange', onForeground)
   window.removeEventListener('focus', onForeground)
   clear()
@@ -122,7 +198,7 @@ onScopeDispose(() => {
           最近更新 <time :datetime="data.as_of">{{ formatTime(data.as_of) }}</time>（北京时间）
         </p>
       </div>
-      <el-button :loading="loading" @click="schedule(true)">刷新工作台</el-button>
+      <el-button :loading="loading" @click="handleRefresh">刷新工作台</el-button>
     </header>
 
     <el-alert v-if="error" :title="data ? '刷新失败，当前显示上次成功获取的数据。' : '工作台加载失败'"
@@ -139,6 +215,85 @@ onScopeDispose(() => {
             <span v-if="card.note" class="metric-note">{{ card.note }}</span>
           </router-link>
         </div>
+      </section>
+
+      <section aria-labelledby="trends-title" class="dashboard-section">
+        <div class="dashboard-subhead">
+          <h2 id="trends-title">经营数据</h2>
+          <el-radio-group :model-value="trendDays" size="small"
+            @update:model-value="switchTrendDays">
+            <el-radio-button :value="7">近 7 天</el-radio-button>
+            <el-radio-button :value="30">近 30 天</el-radio-button>
+          </el-radio-group>
+        </div>
+
+        <div v-if="trendError" class="resource-panel">
+          <el-alert :title="trends ? '经营数据刷新失败，当前显示上次成功获取的数据。' : '经营数据加载失败'"
+            :description="trendError" :type="trends ? 'warning' : 'error'" :closable="false" show-icon />
+          <p><el-button size="small" @click="loadTrends()">重试</el-button></p>
+        </div>
+        <p v-else-if="trendLoading && !trends" class="resource-panel" role="status">正在加载经营数据…</p>
+
+        <template v-if="trends">
+          <p class="resource-muted trend-range">
+            {{ trends.from }} 至 {{ trends.to }}（北京时间，含今日）
+          </p>
+          <div class="dashboard-grid">
+            <div v-for="item in keyNumbers" :key="item.label" class="metric">
+              <span class="metric-label">{{ item.label }}</span>
+              <strong :class="{ 'value-negative': item.negative }"
+                :title="item.negative ? '当日退款大于收款' : undefined">{{ item.value }}</strong>
+            </div>
+          </div>
+
+          <p v-if="trendsEmpty" class="resource-panel support-empty">
+            这段时间还没有成交，也没有需要履约的服务。
+          </p>
+          <template v-else>
+            <div class="trend-panels">
+              <div class="resource-panel">
+                <h3>每日收款与退款</h3>
+                <BusinessTrendChart :series="trends.series" :today="trends.today" />
+              </div>
+              <div class="resource-panel">
+                <h3>品类构成</h3>
+                <CategoryBars :items="trends.by_category" />
+              </div>
+            </div>
+
+            <div class="resource-panel trend-table">
+              <el-table :data="trendRows" size="small" row-key="date" max-height="320">
+                <el-table-column label="日期" width="150">
+                  <template #default="{ row }">
+                    {{ row.date }}
+                    <el-tag v-if="row.isToday" size="small" type="warning">进行中</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="收款" width="120">
+                  <template #default="{ row }">{{ formatYuan(row.paid_fen) }}</template>
+                </el-table-column>
+                <el-table-column label="退款" width="120">
+                  <template #default="{ row }">{{ formatYuan(row.refund_fen) }}</template>
+                </el-table-column>
+                <el-table-column label="净收款" width="130">
+                  <template #default="{ row }">
+                    <span :class="{ 'value-negative': row.net_fen < 0 }"
+                      :title="row.net_fen < 0 ? '当日退款大于收款' : undefined">
+                      {{ formatYuan(row.net_fen) }}
+                    </span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="orders" label="订单数" width="90" />
+                <el-table-column prop="fulfillment_total" label="履约任务" width="100" />
+                <el-table-column label="车队占用" width="120">
+                  <template #default="{ row }">
+                    {{ row.fleet_used }} / {{ row.fleet_capacity }}
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </template>
+        </template>
       </section>
 
       <section aria-labelledby="work-title" class="dashboard-section">
@@ -191,6 +346,11 @@ onScopeDispose(() => {
 .metric-note { color: #4a5e73; font-size: .82rem; }
 .metric-alert { color: #8b2d18; background: #fff5ee; border-color: #ebc6ae; }
 .metric-alert:hover { background: #ffecde; border-color: #b57552; }
+.value-negative { color: #c0392b; }
+.trend-range { margin-bottom: 8px; }
+.trend-panels { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px; margin-top: 12px; }
+.trend-panels h3 { font-size: 1.03rem; margin-bottom: 8px; }
+.trend-table { margin-top: 12px; }
 .priority-panel { margin-top: 14px; }
 .priority-panel h3 { font-size: 1.03rem; }
 .priority-list { list-style: none; margin-top: 8px; }
@@ -199,6 +359,7 @@ onScopeDispose(() => {
 .priority-row time { color: #4a5e73; }
 @media (max-width: 880px) {
   .dashboard-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .trend-panels { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 450px) {
   .metric { padding: 11px; }

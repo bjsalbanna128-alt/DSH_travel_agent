@@ -1,6 +1,8 @@
-﻿"""Operator endpoints, protected as a group when mounted on the application."""
+﻿from typing import Literal
 
-from fastapi import APIRouter, Depends
+"""Operator endpoints, protected as a group when mounted on the application."""
+
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.admin_resources import router as resource_router
 from app.api.admin_trips import router as trip_router
@@ -17,8 +19,10 @@ from app.api.recommendations import admin_router as recommendation_router
 from app.api.recommendation_delivery import router as recommendation_delivery_router
 from app.api.scenic_quality import router as scenic_quality_router
 from app.api.support import admin_router as support_router, no_store
-from app.schemas.dashboard import DashboardResponse
-from app.services.dashboard import load_dashboard
+from app.schemas.dashboard import DashboardResponse, DashboardTrends
+from app.services.dashboard import load_dashboard, load_trends
+
+TrendDays = int  # 7 或 30，取值在路由内校验并返回 422
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
@@ -31,6 +35,14 @@ async def admin_session(account: CurrentOperator):
 @router.get("/dashboard", response_model=DashboardResponse, dependencies=[Depends(no_store)])
 async def dashboard(account: CurrentOperator, db: DbSession):
     return await load_dashboard(db, account)
+
+
+@router.get("/dashboard/trends", response_model=DashboardTrends, dependencies=[Depends(no_store)])
+async def dashboard_trends(account: CurrentOperator, db: DbSession, days: TrendDays = 7):
+    """近 N 个北京自然日的经营数据，含今日。"""
+    if days not in (7, 30):
+        raise HTTPException(422, "days 只能是 7 或 30。")
+    return await load_trends(db, days)
 
 
 router.include_router(resource_router)
@@ -46,4 +58,6 @@ router.include_router(fulfillment_router)
 router.include_router(dialog_router)
 router.include_router(recommendation_delivery_router)
 router.include_router(scenic_quality_router)
+
+
 
