@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.resource_models import PriceOffer, Product, Supplier
+from app.db.resource_models import Driver, PriceOffer, Product, Supplier, Vehicle
 from app.schemas.admin_resources import (
     MAX_OFFER_DAYS,
     PRICE_UNITS,
@@ -46,6 +46,11 @@ async def delete_supplier(db: AsyncSession, supplier: Supplier) -> None:
     detail = "该供应商仍有关联商品，请先在商品管理中处理后再删除。"
     if await db.scalar(select(Product.id).where(Product.supplier_id == supplier.id).limit(1)):
         raise HTTPException(409, detail)
+    fleet_detail = "该供应商仍有车辆或司机，请先处理车队台账后再删除。"
+    if await db.scalar(select(Vehicle.id).where(Vehicle.supplier_id == supplier.id).limit(1)):
+        raise HTTPException(409, fleet_detail)
+    if await db.scalar(select(Driver.id).where(Driver.supplier_id == supplier.id).limit(1)):
+        raise HTTPException(409, fleet_detail)
     await db.delete(supplier)
     await flush(db, detail)
 
@@ -168,12 +173,23 @@ def offer_day(
         reasons.append("product_off_shelf")
     if offer is None:
         reasons.append("unquoted")
-    elif offer.status == "stopped":
-        reasons.append("offer_stopped")
+    else:
+        if offer.status == "stopped":
+            reasons.append("offer_stopped")
+        if offer.total_quantity is None:
+            # 未核定投放量的历史报价只能查看，游客不能下单。
+            reasons.append("unverified_stock")
+        elif offer.remaining_quantity is not None and offer.remaining_quantity <= 0:
+            reasons.append("sold_out")
 
     quote = None if offer is None else OfferQuote(
         cost_fen=offer.cost_fen, sale_fen=offer.sale_fen, status=offer.status,
         below_cost=offer.sale_fen < offer.cost_fen,
+        total_quantity=offer.total_quantity,
+        reserved_quantity=offer.reserved_quantity,
+        confirmed_quantity=offer.confirmed_quantity,
+        remaining=offer.remaining_quantity,
+        stock_verified=offer.stock_verified,
     )
     return OfferDay(service_date=day, quote=quote, can_sell=not reasons, reasons=reasons)
 
@@ -261,10 +277,23 @@ async def create_offer(db: AsyncSession, product: Product, data: OfferCreate) ->
 
 async def update_offer(db: AsyncSession, product: Product, day: date, patch: OfferPatch) -> OfferDay:
     offer = await get_offer(db, product, day)
-    for name, value in patch.model_dump(exclude_unset=True).items():
+    values = patch.model_dump(exclude_unset=True)
+    if "total_quantity" in values:
+        _check_total(day, values["total_quantity"], offer.reserved_quantity + offer.confirmed_quantity)
+    for name, value in values.items():
         setattr(offer, name, value)
     await flush(db, "报价已被修改，请刷新后重试。")
     return await get_offer_day(db, product, offer)
+
+
+def _check_total(day: date, total: int | None, committed: int) -> None:
+    if total is not None and total < committed:
+        raise HTTPException(409, {
+            "message": "投放数量不能低于已预占与已确认的数量之和，请先处理订单或提高投放数量。",
+            "dates": [day.isoformat()],
+            "committed": committed,
+            "requested": total,
+        })
 
 
 async def batch_offers(db: AsyncSession, product: Product, data: OfferBatch) -> OfferBatchResult:
@@ -280,8 +309,11 @@ async def batch_offers(db: AsyncSession, product: Product, data: OfferBatch) -> 
     for day in days:
         offer = by_day.get(day)
         if offer is None:
-            offer = PriceOffer(product_id=product.id, service_date=day)
+            offer = PriceOffer(product_id=product.id, service_date=day, total_quantity=data.total_quantity)
             db.add(offer)
+        elif data.total_quantity is not None:
+            _check_total(day, data.total_quantity, offer.reserved_quantity + offer.confirmed_quantity)
+            offer.total_quantity = data.total_quantity
         offer.cost_fen = data.cost_fen
         offer.sale_fen = data.sale_fen
         offer.status = data.status

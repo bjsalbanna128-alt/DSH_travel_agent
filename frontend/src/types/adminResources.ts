@@ -1,12 +1,18 @@
 export type SupplierStatus = 'active' | 'inactive'
+export type SupplierKind = 'hotel' | 'ticket' | 'vehicle_fleet' | 'other'
 export type ProductType = 'hotel_room' | 'attraction_ticket' | 'vehicle'
 export type ProductStatus = 'on_shelf' | 'off_shelf'
 export type PoiKind = 'hotel' | 'attraction' | 'service_point'
 export type OfferStatus = 'available' | 'stopped'
 
+export const supplierKindLabels: Record<SupplierKind, string> = {
+  hotel: '酒店', ticket: '景区票务', vehicle_fleet: '车队', other: '其他',
+}
+
 export interface SupplierFields {
   name: string
   settlement_name: string
+  kind: SupplierKind
   contact_name: string
   contact_info: string
   notes: string
@@ -59,14 +65,24 @@ export interface OfferValues {
   cost_fen: number
   sale_fen: number
   status: OfferStatus
+  total_quantity: number | null
+}
+
+export interface OfferQuote extends OfferValues {
+  below_cost: boolean
+  reserved_quantity: number
+  confirmed_quantity: number
+  remaining: number | null
+  stock_verified: boolean
 }
 
 export type UnavailableReason =
-  'supplier_inactive' | 'product_off_shelf' | 'unquoted' | 'offer_stopped'
+  | 'supplier_inactive' | 'product_off_shelf' | 'unquoted' | 'offer_stopped'
+  | 'unverified_stock' | 'sold_out'
 
 export interface OfferDay {
   service_date: string
-  quote: (OfferValues & { below_cost: boolean }) | null
+  quote: OfferQuote | null
   can_sell: boolean
   reasons: UnavailableReason[]
 }
@@ -98,4 +114,5 @@ export const poiSourceLabels: Record<PoiReference['source'], string> = { amap: '
 export const offerReasons: Record<UnavailableReason, string> = {
   supplier_inactive: '供应商停用', product_off_shelf: '商品下架',
   unquoted: '未报价', offer_stopped: '当日停售',
+  unverified_stock: '库存未核定', sold_out: '已售罄',
 }

@@ -216,6 +216,23 @@ async function removeOffer(day: OfferDay) {
             <el-table-column label="报价状态" width="100">
               <template #default="{ row }">{{ row.quote ? (row.quote.status === 'available' ? '可售' : '停售') : '未报价' }}</template>
             </el-table-column>
+            <el-table-column label="投放 / 剩余" min-width="130">
+              <template #default="{ row }">
+                <template v-if="row.quote">
+                  <span v-if="row.quote.total_quantity !== null">
+                    {{ row.quote.total_quantity }} / <strong>{{ row.quote.remaining }}</strong>
+                  </span>
+                  <span v-else class="unavailable-reason">未核定</span>
+                </template>
+                <span v-else class="resource-muted">—</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="预占 / 确认" min-width="120">
+              <template #default="{ row }">
+                <span v-if="row.quote">{{ row.quote.reserved_quantity }} / {{ row.quote.confirmed_quantity }}</span>
+                <span v-else class="resource-muted">—</span>
+              </template>
+            </el-table-column>
             <el-table-column label="实际可售" min-width="150">
               <template #default="{ row }">
                 <el-tag v-if="row.can_sell" type="success">可售</el-tag>

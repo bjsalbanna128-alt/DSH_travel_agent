@@ -89,8 +89,11 @@ def product(client, supplier_id, kind="hotel_room", **fields):
     return response.json()
 
 
-def quote(service_date=FIRST, cost=30000, sale=36000, status="available"):
-    return {"service_date": service_date, "cost_fen": cost, "sale_fen": sale, "status": status}
+def quote(service_date=FIRST, cost=30000, sale=36000, status="available", total=3):
+    payload = {"service_date": service_date, "cost_fen": cost, "sale_fen": sale, "status": status}
+    if total is not None:
+        payload["total_quantity"] = total
+    return payload
 
 
 def product_url(product_id):
@@ -212,6 +215,8 @@ def test_quotes_units_count_zero_and_stay_availability(api):
     assert api.get(url).json()["offer_count"] == 2
     assert api.patch(f"{offers}/{SECOND}", json={"sale_fen": 0, "status": "stopped"}).json()["quote"] == {
         "cost_fen": 30000, "sale_fen": 0, "status": "stopped", "below_cost": True,
+        "total_quantity": 3, "reserved_quantity": 0, "confirmed_quantity": 0,
+        "remaining": 3, "stock_verified": True,
     }
     stopped = api.get(offers, params={**stay, "status": "stopped"}).json()
     assert stopped["total"] == 1 and stopped["items"][0]["service_date"] == SECOND

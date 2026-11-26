@@ -16,6 +16,7 @@ const form = reactive({
   status: (existing?.status ?? '') as OfferStatus | '',
   cost: existing ? (existing.cost_fen / 100).toFixed(2) : '',
   sale: existing ? (existing.sale_fen / 100).toFixed(2) : '',
+  total: existing?.total_quantity != null ? String(existing.total_quantity) : '',
   overwrite: false,
 })
 const formError = ref('')
@@ -25,6 +26,12 @@ const saving = ref(false)
 const cost = computed(() => readYuan(form.cost))
 const sale = computed(() => readYuan(form.sale))
 const belowCost = computed(() => cost.value !== undefined && sale.value !== undefined && sale.value < cost.value)
+const totalQuantity = computed(() => {
+  const raw = form.total.trim()
+  if (!/^\d+$/.test(raw)) return undefined
+  const value = Number(raw)
+  return value <= 1_000_000 ? value : undefined
+})
 
 const { data: preview, loading: previewing, error: loadError, load, clear } = useAdminQuery(signal =>
   adminResources.offers(props.productId, { start_date: form.start, end_date: form.end, page_size: 366 }, signal),
@@ -59,6 +66,10 @@ async function save() {
     formError.value = '请填写非负金额（最多两位小数、每项最多 ¥21474836.47），并选择报价状态。'
     return
   }
+  if (totalQuantity.value === undefined) {
+    formError.value = '请填写投放数量（0 表示不投放，未核定的报价游客无法购买）。'
+    return
+  }
   if (props.mode === 'single' && !form.date) {
     formError.value = '请填写服务日期。'
     return
@@ -74,7 +85,10 @@ async function save() {
 
   saving.value = true
   try {
-    const values = { cost_fen: cost.value, sale_fen: sale.value, status: form.status }
+    const values = {
+      cost_fen: cost.value, sale_fen: sale.value, status: form.status,
+      total_quantity: totalQuantity.value,
+    }
     if (props.mode === 'batch') {
       const result = await adminResources.batchOffers(props.productId, {
         ...values, start_date: form.start, end_date: form.end, overwrite: form.overwrite,
@@ -127,6 +141,10 @@ async function save() {
         </template>
         <el-form-item label="成本（元）" required><el-input v-model="form.cost" inputmode="decimal" placeholder="0.00" /></el-form-item>
         <el-form-item label="对客售价（元）" required><el-input v-model="form.sale" inputmode="decimal" placeholder="0.00" /></el-form-item>
+        <el-form-item label="投放数量" required>
+          <el-input v-model="form.total" inputmode="numeric" placeholder="例如 5" />
+          <span class="resource-muted">0 表示不投放；未填写视为库存未核定，游客不能购买。</span>
+        </el-form-item>
         <el-alert v-if="belowCost" class="resource-form-wide resource-form-error" type="warning" :closable="false"
           show-icon title="售价低于成本，仍可保存为促销报价。" />
         <el-form-item label="报价状态" required>

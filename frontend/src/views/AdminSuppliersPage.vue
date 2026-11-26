@@ -3,7 +3,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { adminError, adminResources } from '../api/adminResources'
 import { useAdminQuery } from '../composables/useAdminQuery'
-import type { Supplier, SupplierFields, SupplierStatus } from '../types/adminResources'
+import { supplierKindLabels, type Supplier, type SupplierFields, type SupplierKind, type SupplierStatus } from '../types/adminResources'
 
 const page = ref(1)
 const filters = reactive({ name: '', status: '' as SupplierStatus | '' })
@@ -17,7 +17,9 @@ const selectedId = ref('')
 const saving = ref(false)
 const formError = ref('')
 const rowAction = ref('')
-const blank: SupplierFields = { name: '', settlement_name: '', contact_name: '', contact_info: '', notes: '' }
+const blank: SupplierFields = {
+  name: '', settlement_name: '', kind: 'other', contact_name: '', contact_info: '', notes: '',
+}
 const form = reactive<SupplierFields>({ ...blank })
 const record = useAdminQuery(signal => adminResources.supplier(selectedId.value, signal))
 const { data: details, loading: detailLoading, error: detailError } = record
@@ -40,6 +42,7 @@ function fillForm(supplier: Supplier) {
   Object.assign(form, {
     name: supplier.name,
     settlement_name: supplier.settlement_name,
+    kind: supplier.kind ?? 'other',
     contact_name: supplier.contact_name,
     contact_info: supplier.contact_info,
     notes: supplier.notes,
@@ -151,6 +154,9 @@ onMounted(load)
           </template>
         </el-table-column>
         <el-table-column label="结算主体" prop="settlement_name" min-width="160" />
+        <el-table-column label="类型" width="110">
+          <template #default="{ row }">{{ supplierKindLabels[row.kind as SupplierKind] ?? '其他' }}</template>
+        </el-table-column>
         <el-table-column label="联系人" prop="contact_name" min-width="100" />
         <el-table-column label="状态" width="90">
           <template #default="{ row }">
@@ -207,6 +213,11 @@ onMounted(load)
             <el-input v-model="form.settlement_name" maxlength="160">
               <template #append><el-button @click="form.settlement_name = form.name">同名</el-button></template>
             </el-input>
+          </el-form-item>
+          <el-form-item label="类型">
+            <el-select v-model="form.kind" aria-label="供应商类型">
+              <el-option v-for="(label, value) in supplierKindLabels" :key="value" :label="label" :value="value" />
+            </el-select>
           </el-form-item>
           <el-form-item label="联系人"><el-input v-model="form.contact_name" maxlength="100" /></el-form-item>
           <el-form-item label="联系方式"><el-input v-model="form.contact_info" maxlength="160" /></el-form-item>

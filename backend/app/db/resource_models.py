@@ -3,7 +3,10 @@
 from datetime import date, datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import JSON, CheckConstraint, Date, DateTime, ForeignKey, Integer, String, Text, inspect
+from sqlalchemy import (
+    JSON, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint,
+    inspect, text,
+)
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,11 +23,17 @@ def _utc_now() -> datetime:
 
 class Supplier(Base):
     __tablename__ = "suppliers"
-    __table_args__ = (CheckConstraint("status IN ('active', 'inactive')", name="ck_supplier_status"),)
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'inactive')", name="ck_supplier_status"),
+        CheckConstraint(
+            "kind IN ('hotel', 'ticket', 'vehicle_fleet', 'other')", name="ck_supplier_kind",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
     name: Mapped[str] = mapped_column(String(160), index=True)
     settlement_name: Mapped[str] = mapped_column(String(160))
+    kind: Mapped[str] = mapped_column(String(24), default="other", server_default="other", index=True)
     contact_name: Mapped[str] = mapped_column(String(100), default="", server_default="")
     contact_info: Mapped[str] = mapped_column(String(160), default="", server_default="")
     notes: Mapped[str] = mapped_column(Text, default="", server_default="")
@@ -59,6 +68,16 @@ class PriceOffer(Base):
     __table_args__ = (
         CheckConstraint("cost_fen >= 0 AND sale_fen >= 0", name="ck_offer_nonnegative"),
         CheckConstraint("status IN ('available', 'stopped')", name="ck_offer_status"),
+        CheckConstraint(
+            "total_quantity IS NULL OR total_quantity >= 0", name="ck_offer_total_nonnegative",
+        ),
+        CheckConstraint(
+            "reserved_quantity >= 0 AND confirmed_quantity >= 0", name="ck_offer_allocations_nonnegative",
+        ),
+        CheckConstraint(
+            "total_quantity IS NULL OR reserved_quantity + confirmed_quantity <= total_quantity",
+            name="ck_offer_within_total",
+        ),
     )
 
     product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"), primary_key=True)
@@ -66,6 +85,91 @@ class PriceOffer(Base):
     cost_fen: Mapped[int] = mapped_column(Integer)
     sale_fen: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(16))
+    # 总投放为空表示库存未核实：可以查看历史，但游客不能下单。
+    total_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reserved_quantity: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    confirmed_quantity: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+    @property
+    def stock_verified(self) -> bool:
+        return self.total_quantity is not None
+
+    @property
+    def remaining_quantity(self) -> int | None:
+        if self.total_quantity is None:
+            return None
+        return self.total_quantity - self.reserved_quantity - self.confirmed_quantity
+
+
+class OfferAllocation(Base):
+    """One row per order and service day, tracking reserved or confirmed stock."""
+
+    __tablename__ = "offer_allocations"
+    __table_args__ = (
+        UniqueConstraint("order_id", "product_id", "service_date", name="uq_allocation_order_day"),
+        CheckConstraint("quantity > 0", name="ck_allocation_positive"),
+        CheckConstraint(
+            "state IN ('reserved', 'confirmed', 'released')", name="ck_allocation_state",
+        ),
+        Index("ix_allocation_order", "order_id"),
+        Index("ix_allocation_expiry", "state", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    order_id: Mapped[str] = mapped_column(String(36), index=True)
+    order_item_id: Mapped[str | None] = mapped_column(String(36))
+    product_id: Mapped[str] = mapped_column(ForeignKey("products.id", ondelete="RESTRICT"))
+    service_date: Mapped[date] = mapped_column(Date)
+    quantity: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(16), default="reserved", server_default="reserved")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now,
+    )
+
+
+class Vehicle(Base):
+    __tablename__ = "vehicles"
+    __table_args__ = (
+        UniqueConstraint("supplier_id", "plate_no", name="uq_vehicle_plate"),
+        CheckConstraint("seats > 0", name="ck_vehicle_seats"),
+        CheckConstraint("luggage >= 0", name="ck_vehicle_luggage"),
+        CheckConstraint("status IN ('active', 'inactive')", name="ck_vehicle_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    supplier_id: Mapped[str] = mapped_column(ForeignKey("suppliers.id", ondelete="RESTRICT"), index=True)
+    plate_no: Mapped[str] = mapped_column(String(16))
+    model_name: Mapped[str] = mapped_column(String(80), default="", server_default="")
+    seats: Mapped[int] = mapped_column(Integer)
+    luggage: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    notes: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now,
+    )
+
+
+class Driver(Base):
+    __tablename__ = "drivers"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'inactive')", name="ck_driver_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_new_id)
+    supplier_id: Mapped[str] = mapped_column(ForeignKey("suppliers.id", ondelete="RESTRICT"), index=True)
+    name: Mapped[str] = mapped_column(String(50))
+    phone: Mapped[str] = mapped_column(String(32))
+    license_type: Mapped[str] = mapped_column(String(16), default="", server_default="")
+    service_cities: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(16), default="active", server_default="active")
+    notes: Mapped[str] = mapped_column(Text, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, onupdate=_utc_now,
+    )
 
 
 def check_existing_price_offers(conn: Connection) -> None:
