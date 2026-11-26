@@ -1,15 +1,17 @@
 """Operator endpoints, protected as a group when mounted on the application."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.api.admin_resources import router as resource_router
 from app.api.admin_trips import router as trip_router
 from app.api.auth import AccountResponse
-from app.api.deps import CurrentOperator
+from app.api.deps import CurrentOperator, DbSession
 from app.api.itinerary_templates import admin_router as template_router
 from app.api.membership import admin_router as membership_router
 from app.api.recommendations import admin_router as recommendation_router
-from app.api.support import admin_router as support_router
+from app.api.support import admin_router as support_router, no_store
+from app.schemas.dashboard import DashboardResponse
+from app.services.dashboard import load_dashboard
 
 router = APIRouter(prefix="/v1/admin", tags=["admin"])
 
@@ -17,6 +19,11 @@ router = APIRouter(prefix="/v1/admin", tags=["admin"])
 @router.get("/session", response_model=AccountResponse)
 async def admin_session(account: CurrentOperator):
     return AccountResponse.from_account(account)
+
+
+@router.get("/dashboard", response_model=DashboardResponse, dependencies=[Depends(no_store)])
+async def dashboard(account: CurrentOperator, db: DbSession):
+    return await load_dashboard(db, account)
 
 
 router.include_router(resource_router)

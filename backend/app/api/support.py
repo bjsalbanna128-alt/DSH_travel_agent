@@ -10,7 +10,7 @@ from app.schemas.admin_resources import ResourcePage
 from app.schemas.support import (
     AdminTicketDetail, AdminTicketPage, ChangeMessageSetting, ChangePriority, CloseTicket, ExpectedRevision,
     InboxMessage, InboxMessageDetail, MessageCode, MessageSettingView, ReadMessage, SubmitTicket, TicketCategory,
-    TicketDetail, TicketStatus, TicketSummary, UnreadCount,
+    TicketDetail, TicketPriority, TicketStatus, TicketSummary, UnreadCount,
 )
 from app.services import notifications, tickets
 
@@ -99,9 +99,11 @@ async def my_ticket(ticket_id: str, account: CurrentAccount, db: DbSession):
 async def admin_tickets(
     db: DbSession, page: Page, status: TicketStatus | None = None, category: TicketCategory | None = None,
     assignee_id: Annotated[str | None, Query(max_length=36)] = None,
+    priority: TicketPriority | None = None,
 ):
     return await tickets.admin_list(
-        db, status=status, category=category, assignee_id=assignee_id, offset=page.offset, limit=page.limit,
+        db, status=status, category=category, assignee_id=assignee_id, priority=priority,
+        offset=page.offset, limit=page.limit,
     )
 
 

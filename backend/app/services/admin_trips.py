@@ -48,29 +48,34 @@ def _summary(trip: Trip, username: str) -> TripSummary:
 
 async def _confirmed_trip(db: AsyncSession, trip_id: str) -> tuple[Trip, str]:
     row = (await db.execute(
-        select(Trip, User.username).join(User, User.id == Trip.user_id)
-        .where(Trip.id == trip_id, Trip.status == COMPLETED)
+        _confirmed(select(Trip, User.username)).where(Trip.id == trip_id)
     )).one_or_none()
     if row is None:
         raise HTTPException(404, NOT_FOUND)
     return row[0], row[1]
 
 
+def _confirmed(query):
+    return query.select_from(Trip).join(User, User.id == Trip.user_id).where(Trip.status == COMPLETED)
+
+
+async def count_confirmed_trips(db: AsyncSession, *filters) -> int:
+    return await db.scalar(_confirmed(select(func.count())).where(*filters)) or 0
+
+
 async def list_trips(
     db: AsyncSession, *, username: str, destination: str, start: date | None, end: date | None,
     offset: int, limit: int,
 ) -> ResourcePage[TripSummary]:
-    filters = [Trip.status == COMPLETED, *_date_filters(start, end)]
+    filters = _date_filters(start, end)
     if username.strip():
         filters.append(User.username.icontains(username.strip(), autoescape=True))
     if destination.strip():
         filters.append(Trip.destination.icontains(destination.strip(), autoescape=True))
 
-    total = await db.scalar(
-        select(func.count()).select_from(Trip).join(User, User.id == Trip.user_id).where(*filters)
-    )
+    total = await count_confirmed_trips(db, *filters)
     rows = await db.execute(
-        select(Trip, User.username).join(User, User.id == Trip.user_id).where(*filters)
+        _confirmed(select(Trip, User.username)).where(*filters)
         .order_by(Trip.updated_at.desc(), Trip.id.desc()).offset(offset).limit(limit)
     )
     return ResourcePage[TripSummary](

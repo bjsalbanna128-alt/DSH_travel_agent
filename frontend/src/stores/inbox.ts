@@ -17,6 +17,7 @@ export const useInboxStore = defineStore('inbox', () => {
   const page = ref(1)
   const unreadOnly = ref(false)
   let generation = 0
+  let readRevision = 0
   let countRequest: AbortController | undefined
   let listRequest: AbortController | undefined
   let readRequest: AbortController | undefined
@@ -45,6 +46,21 @@ export const useInboxStore = defineStore('inbox', () => {
     unreadOnly.value = false
   }
   watch([() => auth.sessionVersion, () => auth.userId, () => auth.role], reset, { flush: 'sync' })
+
+  function cancelCount() {
+    countRequest?.abort()
+    countRequest = undefined
+    countStarted = -Infinity
+  }
+
+  function dashboardUnreadReceiver() {
+    cancelCount()
+    const session = generation
+    const appliedReads = readRevision
+    return (count: number) => {
+      if (session === generation && appliedReads === readRevision) unread.value = count
+    }
+  }
 
   async function refreshCount(force = false) {
     if (!auth.user || countRequest || (!force && performance.now() - countStarted < MERGE_WINDOW_MS)) return
@@ -89,13 +105,13 @@ export const useInboxStore = defineStore('inbox', () => {
     }
   }
 
-  function setFilters(nextPage: number, onlyUnread: boolean) {
+  function setFilters(nextPage: number, onlyUnread: boolean, fetch = true) {
     clearListRequest()
     if (page.value !== nextPage || unreadOnly.value !== onlyUnread) messages.value = undefined
     page.value = nextPage
     unreadOnly.value = onlyUnread
     messageError.value = ''
-    void refreshList(true)
+    if (fetch) void refreshList(true)
   }
 
   async function read(message: InboxMessage) {
@@ -106,8 +122,8 @@ export const useInboxStore = defineStore('inbox', () => {
     try {
       const result = await supportApi.read(auth.role === 'operator', message.id, request.signal)
       if (session !== generation || request.signal.aborted) return
-      countRequest?.abort()
-      countRequest = undefined
+      readRevision++
+      cancelCount()
       clearListRequest()
       unread.value = result.unread_count
       if (messages.value) {
@@ -125,5 +141,8 @@ export const useInboxStore = defineStore('inbox', () => {
     }
   }
 
-  return { unread, messages, messageError, loading, page, unreadOnly, refreshCount, refreshList, setFilters, clearListRequest, read }
+  return {
+    unread, messages, messageError, loading, page, unreadOnly, refreshCount, refreshList,
+    setFilters, clearListRequest, cancelCount, dashboardUnreadReceiver, read,
+  }
 })

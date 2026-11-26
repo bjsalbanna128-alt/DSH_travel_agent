@@ -86,13 +86,15 @@ def _admin_summary(ticket: Ticket, names: dict[str, str]) -> AdminTicketSummary:
 
 async def admin_list(
     db: AsyncSession, *, status: TicketStatus | None, category: TicketCategory | None,
-    assignee_id: str | None, offset: int, limit: int,
+    assignee_id: str | None, offset: int, limit: int, priority: TicketPriority | None = None,
 ) -> AdminTicketPage:
     filters = []
     if status:
         filters.append(Ticket.status == status)
     if category:
         filters.append(Ticket.category == category)
+    if priority:
+        filters.append(Ticket.priority == priority)
     if assignee_id:
         filters.append(Ticket.assignee_id.is_(None) if assignee_id == "unassigned" else Ticket.assignee_id == assignee_id)
     tickets, total = await _page(db, filters, offset, limit)
@@ -105,6 +107,10 @@ async def admin_list(
         items=[_admin_summary(row, names) for row in tickets], total=total,
         assignees=[AccountLabel(id=account_id, username=name) for account_id, name in assignees],
     )
+
+
+def unassigned_tickets():
+    return (Ticket.status == "new") & Ticket.assignee_id.is_(None)
 
 
 async def admin_detail(db: AsyncSession, ticket_id: str) -> AdminTicketDetail:

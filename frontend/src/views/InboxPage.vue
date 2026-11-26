@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { adminError } from '../api/adminResources'
 import { useInboxStore } from '../stores/inbox'
@@ -12,7 +12,20 @@ const route = useRoute()
 const opening = ref('')
 const actionError = ref('')
 
-onMounted(() => { if (!document.hidden) void inbox.refreshList() })
+watch([() => route.name, () => route.query.unread_only], ([name, unreadOnly]) => {
+  if (name === 'admin-messages') inbox.setFilters(1, unreadOnly === 'true', !document.hidden)
+}, { immediate: true })
+onMounted(() => {
+  if (route.name === 'messages' && !document.hidden) void inbox.refreshList()
+})
+
+function filterUnread(onlyUnread: boolean) {
+  if (route.name === 'admin-messages') {
+    void router.push({ query: { ...route.query, unread_only: onlyUnread ? 'true' : undefined } })
+  } else {
+    inbox.setFilters(1, onlyUnread)
+  }
+}
 
 async function openMessage(message: InboxMessage) {
   if (opening.value) return
@@ -37,7 +50,7 @@ async function openMessage(message: InboxMessage) {
     </header>
     <div class="resource-panel">
       <div class="resource-actions support-toolbar">
-        <el-checkbox :model-value="inbox.unreadOnly" @update:model-value="inbox.setFilters(1, $event === true)">只看未读</el-checkbox>
+        <el-checkbox :model-value="inbox.unreadOnly" @update:model-value="filterUnread($event === true)">只看未读</el-checkbox>
         <el-button :loading="inbox.loading && !inbox.messages" @click="inbox.refreshList(true)">刷新</el-button>
       </div>
       <el-alert v-if="actionError || inbox.messageError" class="support-error"
@@ -58,7 +71,7 @@ async function openMessage(message: InboxMessage) {
       <p v-if="inbox.messages && !inbox.messages.items.length" class="support-empty">
         {{ inbox.unreadOnly ? '没有未读消息' : '暂无消息' }}
       </p>
-      <div v-if="inbox.messages && inbox.messages.total > 20" class="resource-pagination">
+      <div v-if="inbox.messages && (route.name === 'admin-messages' || inbox.messages.total > 20)" class="resource-pagination">
         <el-pagination :current-page="inbox.page" :total="inbox.messages.total" :page-size="20"
           layout="total, prev, pager, next" @current-change="inbox.setFilters($event, inbox.unreadOnly)" />
       </div>

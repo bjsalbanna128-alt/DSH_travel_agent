@@ -1,18 +1,22 @@
 <script setup lang="ts">
-import { computed, onMounted, onScopeDispose, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, onScopeDispose, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter, type LocationQueryValue } from 'vue-router'
 import { adminError } from '../api/adminResources'
 import { supportApi } from '../api/support'
 import { useAdminQuery } from '../composables/useAdminQuery'
 import {
   categoryLabels, priorityLabels, supportTime, ticketStatusLabels,
-  type AdminTicketPage, type NewTicket, type TicketCategory, type TicketStatus, type TicketSummary,
+  type AdminTicketPage, type NewTicket, type TicketCategory, type TicketPriority, type TicketStatus, type TicketSummary,
 } from '../types/support'
 
 const props = defineProps<{ operator?: boolean }>()
 const router = useRouter()
+const route = useRoute()
 const page = ref(1)
-const filters = reactive({ status: '' as TicketStatus | '', category: '' as TicketCategory | '', assignee_id: '' })
+const filters = reactive({
+  status: '' as TicketStatus | '', category: '' as TicketCategory | '',
+  assignee_id: '', priority: '' as TicketPriority | '',
+})
 const { data, loading, error, load } = useAdminQuery(signal => props.operator
   ? supportApi.adminTickets({ ...filters, page: page.value }, signal)
   : supportApi.myTickets(page.value, signal))
@@ -23,12 +27,40 @@ const submitting = ref(false)
 const form = reactive<NewTicket>({ category: 'inquiry', subject: '', content: '' })
 let submitRequest: AbortController | undefined
 
-onMounted(load)
+function readOption<T extends string>(value: LocationQueryValue | LocationQueryValue[], options: Record<T, string>): T | '' {
+  return typeof value === 'string' && Object.hasOwn(options, value) ? value as T : ''
+}
+
+watch(() => route.query, query => {
+  if (!props.operator || route.name !== 'admin-tickets') return
+  filters.status = readOption(query.status, ticketStatusLabels)
+  filters.category = readOption(query.category, categoryLabels)
+  filters.priority = readOption(query.priority, priorityLabels)
+  filters.assignee_id = typeof query.assignee_id === 'string' && query.assignee_id.length <= 36 ? query.assignee_id : ''
+  page.value = 1
+  void load()
+}, { immediate: true })
+onMounted(() => { if (!props.operator) void load() })
 onScopeDispose(() => submitRequest?.abort())
 
 function search() {
+  const query = {
+    ...route.query,
+    status: filters.status || undefined, category: filters.category || undefined,
+    assignee_id: filters.assignee_id || undefined, priority: filters.priority || undefined,
+  }
+  const next = { name: 'admin-tickets', query }
+  if (router.resolve(next).fullPath !== route.fullPath) {
+    void router.push(next)
+    return
+  }
   page.value = 1
   void load()
+}
+
+function resetFilters() {
+  Object.assign(filters, { status: '', category: '', assignee_id: '', priority: '' })
+  search()
 }
 
 function details(row: TicketSummary) {
@@ -68,17 +100,21 @@ async function submit() {
     </header>
     <div class="resource-panel">
       <form v-if="operator" class="resource-toolbar" @submit.prevent="search">
-        <el-select v-model="filters.status" aria-label="按状态筛选" placeholder="全部状态" clearable value-on-clear="">
-          <el-option v-for="(label, value) in ticketStatusLabels" :key="value" :value="value" :label="label" />
+        <el-select v-model="filters.status" aria-label="按状态筛选" placeholder="全部状态" clearable value-on-clear="" @change="search">
+          <el-option v-for="(label, value) in ticketStatusLabels" :key="value" :value="value" :label="value === 'new' ? '待接单' : label" />
         </el-select>
-        <el-select v-model="filters.category" aria-label="按分类筛选" placeholder="全部分类" clearable value-on-clear="">
+        <el-select v-model="filters.category" aria-label="按分类筛选" placeholder="全部分类" clearable value-on-clear="" @change="search">
           <el-option v-for="(label, value) in categoryLabels" :key="value" :value="value" :label="label" />
         </el-select>
-        <el-select v-model="filters.assignee_id" aria-label="按负责人筛选" placeholder="所有负责人" clearable value-on-clear="">
-          <el-option value="unassigned" label="待接单" />
+        <el-select v-model="filters.assignee_id" aria-label="按负责人筛选" placeholder="所有负责人" clearable value-on-clear="" @change="search">
+          <el-option value="unassigned" label="未分配" />
           <el-option v-for="account in assignees" :key="account.id" :value="account.id" :label="account.username" />
         </el-select>
+        <el-select v-model="filters.priority" aria-label="按优先级筛选" placeholder="全部优先级" clearable value-on-clear="" @change="search">
+          <el-option v-for="(label, value) in priorityLabels" :key="value" :value="value" :label="label" />
+        </el-select>
         <el-button native-type="submit" :loading="loading">查询</el-button>
+        <el-button @click="resetFilters">清空筛选</el-button>
       </form>
       <div v-if="error" class="resource-stack support-error">
         <el-alert :title="error" type="error" :closable="false" show-icon />
@@ -122,7 +158,7 @@ async function submit() {
           </li>
         </ul>
       </template>
-      <div v-if="data && data.total > 20" class="resource-pagination">
+      <div v-if="data && (operator || data.total > 20)" class="resource-pagination">
         <el-pagination v-model:current-page="page" :page-size="20" :total="data.total"
           layout="total, prev, pager, next" @current-change="load" />
       </div>

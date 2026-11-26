@@ -11,27 +11,31 @@ export function useInboxPolling() {
   const inbox = useInboxStore()
   const route = useRoute()
   const active = computed(() => Boolean(auth.user && !route.meta.public &&
-    areaMatches(auth.role, route.meta.area)))
+    route.name !== 'admin-home' && areaMatches(auth.role, route.meta.area)))
   const isList = computed(() => route.name === 'messages' || route.name === 'admin-messages')
   let timer: number | undefined
 
-  function poll() {
+  function schedule(includeList: boolean) {
     window.clearTimeout(timer)
     if (!active.value || document.hidden) return
     void inbox.refreshCount()
-    if (isList.value) void inbox.refreshList()
+    if (includeList && isList.value) void inbox.refreshList()
     timer = window.setTimeout(poll, POLL_MS)
   }
 
-  watch([active, () => auth.sessionVersion, () => auth.userId, () => auth.role], poll)
+  function poll() { schedule(true) }
+
+  watch([active, () => auth.sessionVersion, () => auth.userId, () => auth.role], () => {
+    if (!active.value) inbox.cancelCount()
+    schedule(false)
+  })
   watch(isList, list => {
-    if (list) poll()
-    else inbox.clearListRequest()
+    if (!list) inbox.clearListRequest()
   })
   onMounted(() => {
     document.addEventListener('visibilitychange', poll)
     window.addEventListener('focus', poll)
-    poll()
+    schedule(false)
   })
   onScopeDispose(() => {
     document.removeEventListener('visibilitychange', poll)
