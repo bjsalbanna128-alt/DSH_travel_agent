@@ -113,6 +113,8 @@ async def supervisor_node(state: dict) -> dict:
     # Check what's done
     has_attractions = bool(state.get("attractions"))
     has_routes = bool(state.get("routes"))
+    if not has_attractions and state.get("scenic_candidates_filtered"):
+        has_attractions = has_routes = True
     has_hotels = bool(state.get("hotels"))
     has_restaurants = bool(state.get("restaurants"))
     has_transport = "transport" in state

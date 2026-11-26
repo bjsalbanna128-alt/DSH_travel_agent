@@ -168,7 +168,7 @@ function goToDetail() {
   margin-top: 16px; padding: 14px; background: #fdf6ec; border-radius: 8px;
 }
 .tips-title { font-size: 14px; font-weight: 600; color: #e6a23c; margin-bottom: 6px; }
-.tips-card p { font-size: 13px; color: #606266; line-height: 1.6; margin: 0; }
+.tips-card p { font-size: 13px; color: #606266; line-height: 1.6; margin: 0; white-space: pre-line; }
 
 /* Approval banner */
 </style>

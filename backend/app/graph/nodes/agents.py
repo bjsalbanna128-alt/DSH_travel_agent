@@ -7,12 +7,14 @@ from datetime import datetime
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from app.schemas.travel_state import AgentExecution, IntercityEstimate
 from app.services.geo import haversine_km
+from app.services.planning_quality import available_days, route_guidance, with_poi_identity
 from app.services.poi_service import (
     search_attractions_hybrid,
     search_hotels_hybrid,
     search_restaurants_hybrid,
 )
 from app.services.transport_plan import parse_intercity_estimates
+from app.services.scenic_restrictions import restriction_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,7 @@ async def attraction_node(state: dict) -> dict:
     destination = req.get("destination", "")
     preferences = req.get("preferences", [])
     target_count = days * 3
+    restrictions = state.get("restriction_snapshot") or await restriction_snapshot(destination)
 
     # Step 1: Hybrid search — ChromaDB semantic + Amap realtime
     pois = await search_attractions_hybrid(
@@ -69,6 +72,8 @@ async def attraction_node(state: dict) -> dict:
         preferences=preferences,
         days=days,
     )
+    all_pois = pois
+    pois = [poi for poi in all_pois if available_days(poi, req, restrictions)]
 
     if not pois:
         # Fallback: LLM generates attractions from knowledge
@@ -95,7 +100,11 @@ async def attraction_node(state: dict) -> dict:
         )
 
     data = safe_json_parse(raw, "attraction")
-    count = len(data.get("attractions", []))
+    selected = [
+        with_poi_identity(item, all_pois) for item in data.get("attractions", []) if isinstance(item, dict)
+    ]
+    attractions = [item for item in selected if available_days(item, req, restrictions)]
+    count = len(attractions)
 
     execution = AgentExecution(
         agent_name="attraction_agent",
@@ -111,8 +120,14 @@ async def attraction_node(state: dict) -> dict:
     history.append(execution.model_dump())
 
     return {
-        "attractions": data.get("attractions", []),
+        "attractions": attractions,
         "agent_history": history,
+        "restriction_snapshot": restrictions,
+        "scenic_candidates_filtered": len(all_pois) > len(pois) or len(selected) > count,
+        "scenic_pois": [
+            {key: poi[key] for key in ("source", "id", "name", "city") if key in poi}
+            for poi in all_pois
+        ],
     }
 
 
@@ -259,6 +274,53 @@ ROUTE_REASONER_PROMPT = """你是一个路线规划专家。以下是通过 K-Me
 只输出JSON，不要其他文字。"""
 
 
+def _route_key(attraction):
+    return attraction.get("id") or attraction.get("name", "")
+
+
+def _compute_route(day, cluster, pace):
+    ordered, _ = _nearest_neighbor_tsp(cluster)
+    ordered, total_km = _two_opt(ordered)
+    mode, travel_min = _estimate_travel(total_km, pace)
+    return {
+        "day": day,
+        "attraction_ids": [_route_key(item) for item in ordered],
+        "total_distance_km": round(total_km, 2),
+        "travel_mode": mode,
+        "estimated_travel_time_minutes": travel_min,
+        "algorithm_total_hours": round(sum(item.get("visit_duration_hours", 2) for item in ordered) + travel_min / 60, 1),
+    }
+
+
+def _enforce_open_days(routes, attractions, guidance, pace):
+    if not guidance:
+        return routes
+    indexed = {_route_key(item): item for item in attractions}
+    planned = {route["day"]: dict(route) for route in routes}
+    changed_days, displaced = set(), {}
+    for day, route in planned.items():
+        retained = []
+        for attraction_id in route["attraction_ids"]:
+            rule = guidance.get(attraction_id)
+            if rule and day not in rule["allowed_days"]:
+                displaced[attraction_id] = rule["allowed_days"]
+                changed_days.add(day)
+            else:
+                retained.append(attraction_id)
+        route["attraction_ids"] = retained
+    for attraction_id, allowed_days in displaced.items():
+        if not allowed_days or any(attraction_id in route["attraction_ids"] for route in planned.values()):
+            continue
+        day = min(allowed_days, key=lambda value: (len(planned.get(value, {}).get("attraction_ids", [])), value))
+        planned.setdefault(day, {"day": day, "attraction_ids": []})["attraction_ids"].append(attraction_id)
+        changed_days.add(day)
+    return [
+        _compute_route(day, [indexed[key] for key in route["attraction_ids"] if key in indexed], pace)
+        if day in changed_days else route
+        for day, route in sorted(planned.items())
+    ]
+
+
 async def route_node(state: dict) -> dict:
     """Plan daily routes via K-Means + TSP + deepseek-reasoner refinement.
 
@@ -309,22 +371,10 @@ async def route_node(state: dict) -> dict:
     # NN + 2-opt TSP per cluster, assigned to days
     pace_hours = {"relaxed": 6, "moderate": 8, "intensive": 10}.get(pace, 8)
 
-    baseline_routes = []
-    for day_idx, cluster in enumerate(clusters, 1):
-        ordered, total_km = _nearest_neighbor_tsp(cluster)
-        ordered, total_km = _two_opt(ordered)
-        mode, travel_min = _estimate_travel(total_km, pace)
-        total_hours = sum(a.get("visit_duration_hours", 2) for a in ordered)
-        total_hours += travel_min / 60.0
-
-        baseline_routes.append({
-            "day": day_idx,
-            "attraction_ids": [a.get("id", a.get("name", "")) for a in ordered],
-            "total_distance_km": round(total_km, 2),
-            "travel_mode": mode,
-            "estimated_travel_time_minutes": travel_min,
-            "algorithm_total_hours": round(total_hours, 1),
-        })
+    guidance = route_guidance(attractions, req, state.get("restriction_snapshot") or {"available": True, "rules": []})
+    baseline_routes = _enforce_open_days(
+        [_compute_route(day, cluster, pace) for day, cluster in enumerate(clusters, 1)], attractions, guidance, pace,
+    )
 
     logger.info(
         f"Route agent baseline: {len(baseline_routes)} days, "
@@ -368,6 +418,7 @@ async def route_node(state: dict) -> dict:
             user_prompt=(
                 f"目的地：{req.get('destination')}，{days}天，节奏：{pace}\n"
                 f"约束：每天≤{pace_hours}小时，≤{max_per_day}个景点\n\n"
+                f"景点开放日与注意事项：{json.dumps(guidance, ensure_ascii=False)}。仅在允许日安排。\n\n"
                 f"景点详情：\n" + "\n".join(attr_info_lines) + "\n\n"
                 f"算法生成的基线路线（供参考，可调整）：\n"
                 + "\n".join(
@@ -384,6 +435,7 @@ async def route_node(state: dict) -> dict:
 
         data = safe_json_parse(raw, "route_reasoner")
         routes = data.get("routes", baseline_routes)
+        routes = _enforce_open_days(routes, attractions, guidance, pace)
 
         llm_calls = 1
         logger.info(f"Route reasoner output: {len(routes)} days")

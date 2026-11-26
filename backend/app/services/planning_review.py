@@ -14,6 +14,8 @@ from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from app.schemas.travel_state import Attraction, Hotel, Restaurant, Route, TransportOption
 from app.services.itinerary_costs import estimate_day_cost, traveler_count
 from app.services.notifications import enqueue_trip_confirmation, wake_delivery
+from app.services.planning_quality import annotate, assess, save_report, with_poi_identity
+from app.services.scenic_restrictions import restriction_snapshot
 from app.services.trip_store import (
     TripRevisionConflict,
     TripThreadConflict,
@@ -138,6 +140,8 @@ def _merge_day_change(day: dict, change: DayChange, pace: str) -> dict:
         if "attractions" in patch or not removals <= {a["name"] for a in before}:
             raise ValueError("Invalid attractions to remove")
         revised["attractions"] = [a for a in before if a["name"] not in removals]
+    elif "attractions" in patch:
+        revised["attractions"] = [with_poi_identity(item, before) for item in revised["attractions"]]
     after = revised.get("attractions") or []
     if after != before:
         removed_names = {a["name"] for a in before} - {a["name"] for a in after}
@@ -164,19 +168,30 @@ async def persist_draft(
     sessions, user_id: str, thread_id: str, state: dict, interrupts: tuple
 ) -> dict:
     approval = interrupts[0].value
-    async with sessions.begin() as db:
-        try:
-            trip = await save_trip(db, thread_id, state, user_id, status="draft")
-        except (TripThreadConflict, IntegrityError) as exc:
-            raise ReviewError(409, "该规划会话已有行程，请打开原行程或新建规划") from exc
-        return {
-            **approval,
-            "data": trip.itinerary,
-            "trip_id": trip.id,
-            "thread_id": thread_id,
-            "version": trip.version,
-            "status": trip.status,
-        }
+    try:
+        async with sessions.begin() as db:
+            request = state.get("travel_request", {})
+            itinerary = state.get("itinerary", state)
+            destination = request.get("destination") or itinerary.get("destination", "")
+            rules = state.get("restriction_snapshot") or await restriction_snapshot(destination, db)
+            status, findings = assess(itinerary, {**request, "destination": destination}, rules)
+            try:
+                trip = await save_trip(db, thread_id, {**state, "itinerary": annotate(itinerary, findings)},
+                                       user_id, status="draft")
+            except (TripThreadConflict, IntegrityError) as exc:
+                raise ReviewError(409, "该规划会话已有行程，请打开原行程或新建规划") from exc
+            await save_report(db, trip.id, trip.version, trip.destination, "initial", status, findings)
+            return {
+                **approval,
+                "data": trip.itinerary,
+                "trip_id": trip.id,
+                "thread_id": thread_id,
+                "version": trip.version,
+                "status": trip.status,
+            }
+    except SQLAlchemyError as exc:
+        logger.warning("Could not persist quality report for draft", exc_info=True)
+        raise ReviewError(503, "暂时无法保存行程草稿，请重试") from exc
 
 
 async def review_draft(
@@ -203,9 +218,17 @@ async def review_draft(
     event_queued = False
     try:
         async with sessions.begin() as db:
+            if revised is not None:
+                destination = trip["destination"]
+                request = {**trip["travel_request"], "destination": destination}
+                rules = await restriction_snapshot(destination, db)
+                status, findings = assess(revised, request, rules)
+                revised = annotate(revised, findings)
             saved, newly_confirmed = await apply_draft_decision(
                 db, trip["id"], user_id, decision.version, revised
             )
+            if revised is not None:
+                await save_report(db, saved["id"], saved["version"], saved["destination"], "adjusted", status, findings)
             if newly_confirmed:
                 event_queued = await enqueue_trip_confirmation(db, user_id, saved)
     except TripRevisionConflict as exc:

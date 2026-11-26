@@ -146,7 +146,9 @@ async def stream_travel_planning(request: Request, user_id: CurrentUserId):
                         "display": display,
                         "summary": _summarize(node_key, node_output),
                         "progress": _estimate_progress(node_key, done=True),
-                        "data": node_output if isinstance(node_output, dict) else {},
+                        "data": {key: value for key, value in node_output.items()
+                                 if key not in ("restriction_snapshot", "scenic_pois")}
+                                if isinstance(node_output, dict) else {},
                     })
                     last_node = node_name
 

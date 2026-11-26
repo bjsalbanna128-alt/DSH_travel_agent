@@ -108,7 +108,7 @@ async def search_poi(
     for poi in pois:
         try:
             item = _parse_poi(poi, poi_type)
-            if city_only:
+            if city_only or poi_type == "attraction":
                 city_name = poi.get("cityname")
                 item["city"] = city_name if isinstance(city_name, str) and city_name else city
             results.append(item)

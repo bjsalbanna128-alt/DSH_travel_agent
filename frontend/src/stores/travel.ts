@@ -52,26 +52,28 @@ export const useTravelStore = defineStore('travel', () => {
 
   // ── Clarification action ────────────────────────────
   let clarificationController: AbortController | undefined
+  let clarificationTurn = 1
 
   async function sendClarifyMessage(query: string) {
     clarificationController?.abort()
     const controller = new AbortController()
     clarificationController = controller
+    clarifyThreadId.value ??= crypto.randomUUID()
     isClarifying.value = true
     clarifyMessages.value.push({ role: 'user', content: query })
 
     try {
       const result: ClarifyResponse = await clarifyRequest({
         query,
-        history: clarifyMessages.value.slice(0, -1), // exclude the just-added message
-        travel_request: clarifyTravelRequest.value,
-        thread_id: clarifyThreadId.value ?? undefined,
+        thread_id: clarifyThreadId.value,
+        turn: clarificationTurn,
       }, controller.signal)
       if (controller.signal.aborted) return null
 
       clarifyMessages.value.push({ role: 'agent', content: result.message })
       clarifyTravelRequest.value = result.travel_request
       clarifyThreadId.value = result.thread_id
+      clarificationTurn = result.turn + 1
 
       if (result.action === 'ready') {
         isReady.value = true
@@ -226,6 +228,7 @@ export const useTravelStore = defineStore('travel', () => {
   function resetClarify() {
     clarificationController?.abort()
     clarificationController = undefined
+    clarificationTurn = 1
     clarifyMessages.value = []
     clarifyTravelRequest.value = null
     clarifyThreadId.value = null

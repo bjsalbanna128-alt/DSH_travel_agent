@@ -84,6 +84,13 @@ onBeforeUnmount(() => request?.abort())
             <router-link class="admin-nav-link" :to="{ name: 'admin-tickets' }">工单</router-link>
           </div>
           <router-link class="admin-nav-link" :to="{ name: 'admin-members' }">用户会员</router-link>
+          <div class="admin-nav-group" aria-label="AI 运营">
+            <div class="admin-nav-label">AI 运营</div>
+            <router-link class="admin-nav-link" :to="{ name: 'admin-ai-dialog' }">对话配置</router-link>
+            <router-link class="admin-nav-link" :to="{ name: 'admin-ai-deliveries' }">首页弹窗投放</router-link>
+            <router-link class="admin-nav-link" :to="{ name: 'admin-ai-scenic' }">景区限制</router-link>
+            <router-link class="admin-nav-link" :to="{ name: 'admin-ai-quality' }">规划质检</router-link>
+          </div>
         </nav>
       </el-aside>
       <el-main class="admin-main">

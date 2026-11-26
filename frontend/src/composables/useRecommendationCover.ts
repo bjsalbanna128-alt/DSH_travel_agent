@@ -2,7 +2,7 @@ import { ref, watch } from 'vue'
 import { fetchRecommendationCover } from '../api/recommendations'
 import type { CoverInfo } from '../types/recommendations'
 
-export function useRecommendationCover(source: () => CoverInfo | null | undefined) {
+export function useRecommendationCover(source: () => Pick<CoverInfo, 'id' | 'url'> | null | undefined) {
   const url = ref('')
   const failed = ref(false)
   watch(() => source()?.id, async (_, _previous, cleanup) => {

@@ -34,6 +34,7 @@ export interface ClarifyInput {
   history?: { role: string; content: string }[]
   travel_request?: Record<string, any> | null
   thread_id?: string
+  turn?: number
 }
 
 export async function clarifyRequest(input: ClarifyInput, signal?: AbortSignal): Promise<ClarifyResponse> {
@@ -44,7 +45,8 @@ export async function clarifyRequest(input: ClarifyInput, signal?: AbortSignal):
     signal,
   })
   if (!res.ok) {
-    throw new Error(`Clarify failed: ${res.status}`)
+    const body = await res.json().catch(() => ({}))
+    throw new Error(typeof body.detail === 'string' ? body.detail : `澄清请求失败（${res.status}）`)
   }
   return res.json()
 }

@@ -68,3 +68,28 @@ class RecommendationVersion(Base):
     cover_id: Mapped[str] = mapped_column(ForeignKey("recommendation_images.id", ondelete="RESTRICT"), index=True)
     published_by: Mapped[str] = mapped_column(String(36))
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RecommendationDelivery(Base):
+    __tablename__ = "recommendation_deliveries"
+    __table_args__ = (
+        CheckConstraint("revision > 0", name="ck_recommendation_delivery_revision"),
+        CheckConstraint("starts_at IS NULL OR ends_at IS NULL OR starts_at < ends_at",
+                        name="ck_recommendation_delivery_window"),
+    )
+
+    recommendation_id: Mapped[str] = mapped_column(
+        ForeignKey("recommendations.id", ondelete="RESTRICT"), primary_key=True,
+    )
+    enabled: Mapped[bool]
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revision: Mapped[int]
+    updated_by: Mapped[str | None] = mapped_column(String(36))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class RecommendationDeliveryMigration(Base):
+    __tablename__ = "recommendation_delivery_migration"
+
+    id: Mapped[int] = mapped_column(primary_key=True)

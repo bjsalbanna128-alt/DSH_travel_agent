@@ -11,9 +11,11 @@ from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, ValidationError
 
 from app.api.deps import authenticate_user
+from app.db import database
 from app.db.database import async_session
 from app.graph.travel_graph import AGENT_DISPLAY_NAMES, planning_config, travel_graph
 from app.graph.nodes.clarify import clarify_node
+from app.services.ai_dialog import DialogError
 from app.services.planning_review import (
     DraftDecision, ReviewError, persist_draft, remember_confirmed_trip, review_draft,
 )
@@ -153,7 +155,9 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
                         "display": display,
                         "summary": _summarize(node_key, node_output),
                         "progress": _estimate_progress(node_key, done=True),
-                        "data": node_output if isinstance(node_output, dict) else {},
+                        "data": {key: value for key, value in node_output.items()
+                                 if key not in ("restriction_snapshot", "scenic_pois")}
+                                if isinstance(node_output, dict) else {},
                     })
 
             if not _cancel_flag:
@@ -257,9 +261,13 @@ async def websocket_chat(ws: WebSocket, thread_id: str):
                         user_input=user_input,
                         history=history,
                         travel_request=travel_request,
+                        sessions=database.async_session, user_id=user_id, thread_id=thread_id,
+                        expected_turn=msg.get("turn"),
                     )
                     result["thread_id"] = thread_id
                     await event_queue.put({"type": "clarify", **result})
+                except DialogError as e:
+                    await event_queue.put({"type": "error", "message": str(e), "status": e.status})
                 except Exception as e:
                     logger.exception(f"[WS] Clarify error: {e}")
                     await event_queue.put({"type": "error", "message": str(e)[:500]})

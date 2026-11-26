@@ -104,15 +104,17 @@ async def test_transport_day_mapping_budget_and_first_version(monkeypatch):
 @pytest.mark.asyncio
 async def test_clarification_keeps_partial_destination_until_days_are_known(monkeypatch):
     responses = iter([
-        {"action": "ask", "travel_request": {"destination": "成都"}},
-        {"action": "ready", "travel_request": {}},
-        {"action": "ask", "travel_request": {"days": "3"}},
+        {"changes": {"destination": "成都"}},
+        {"changes": {"budget_total": 9999, "pace": "intensive"}},
+        {"changes": {"days": "3"}},
     ])
 
     async def reply(self, **kwargs):
         if "3天" in kwargs["user_prompt"]:
-            assert "成都" in kwargs["system_prompt"]
-            assert "你计划玩几天？" in kwargs["system_prompt"]
+            context = json.loads(kwargs["user_prompt"])
+            assert context["answered"] == {"destination": "成都"}
+            assert context["previous_question_field"] == "days"
+            assert "你计划玩几天？" not in kwargs["system_prompt"]
         return json.dumps(next(responses))
 
     monkeypatch.setattr(clarify.DeepSeekProvider, "chat", reply)
@@ -123,7 +125,7 @@ async def test_clarification_keeps_partial_destination_until_days_are_known(monk
     assert incomplete["missing_fields"] == ["days"]
     ready = await clarify.clarify_node("3天", history, incomplete["travel_request"])
     assert ready["action"] == "ready"
-    assert ready["travel_request"] == {"destination": "成都", "days": 3}
+    assert ready["travel_request"] == {"destination": "成都", "days": 3, "budget_total": 0, "pace": "moderate"}
 
 
 def test_version_index_migration_preserves_legacy_snapshots():

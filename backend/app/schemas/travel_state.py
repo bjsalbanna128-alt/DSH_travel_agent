@@ -59,6 +59,9 @@ class TravelState(TypedDict, total=False):
     constraint_violations: list[str]
     needs_replan: bool
     replan_count: int
+    restriction_snapshot: dict[str, Any]
+    scenic_candidates_filtered: bool
+    scenic_pois: list[dict[str, Any]]
 
     # ── Error handling ──
     errors: list[dict[str, Any]]
@@ -113,6 +116,8 @@ class Location(BaseModel):
 class Attraction(BaseModel):
     id: str = ""
     name: str
+    source: Literal["amap", "chroma"] | None = None
+    city: str = ""
     category: str = ""  # natural | cultural | entertainment | shopping
     description: str = ""
     rating: float = 4.0

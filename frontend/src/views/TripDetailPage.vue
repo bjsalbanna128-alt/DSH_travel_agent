@@ -401,7 +401,7 @@ const budgetItems = computed(() => {
 .intercity-note { font-size: 12px !important; color: #909399 !important; margin-top: 6px; }
 
 /* Notes */
-.day-notes { background: #fef0f0; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #f56c6c; margin-top: 12px; }
+.day-notes { background: #fef0f0; border-radius: 8px; padding: 10px 14px; font-size: 13px; color: #f56c6c; margin-top: 12px; white-space: pre-line; overflow-wrap: anywhere; }
 
 /* Tips */
 .tips-section {
@@ -409,7 +409,7 @@ const budgetItems = computed(() => {
   box-shadow: 0 1px 4px rgba(0,0,0,.06);
 }
 .tips-section h3 { font-size: 16px; margin-bottom: 8px; }
-.tips-section p { font-size: 14px; color: #606266; line-height: 1.8; }
+.tips-section p { font-size: 14px; color: #606266; line-height: 1.8; white-space: pre-line; }
 
 /* Budget sidebar */
 .budget-card {

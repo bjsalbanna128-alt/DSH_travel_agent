@@ -102,6 +102,26 @@ const router = createRouter({
           component: () => import('../views/AdminHomePage.vue'),
         },
         {
+          path: 'ai/dialog-config',
+          name: 'admin-ai-dialog',
+          component: () => import('../views/AdminAiDialogPage.vue'),
+        },
+        {
+          path: 'ai/home-recommendations',
+          name: 'admin-ai-deliveries',
+          component: () => import('../views/AdminRecommendationDeliveryPage.vue'),
+        },
+        {
+          path: 'ai/scenic-restrictions',
+          name: 'admin-ai-scenic',
+          component: () => import('../views/AdminScenicRestrictionsPage.vue'),
+        },
+        {
+          path: 'ai/quality-reports',
+          name: 'admin-ai-quality',
+          component: () => import('../views/AdminPlanningQualityPage.vue'),
+        },
+        {
           path: 'suppliers',
           name: 'admin-suppliers',
           component: () => import('../views/AdminSuppliersPage.vue'),

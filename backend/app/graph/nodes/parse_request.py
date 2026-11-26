@@ -5,6 +5,7 @@ from datetime import datetime
 
 from app.providers.llm.deepseek import DeepSeekProvider, safe_json_parse
 from app.schemas.travel_state import TravelRequest, AgentExecution
+from app.services.planning_quality import dates_in_text, explicit_departure
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,9 @@ async def parse_request_node(state: dict) -> dict:
         return {
             "travel_request": req.model_dump(),
             "agent_history": [execution.model_dump()],
+            "restriction_snapshot": {},
+            "scenic_candidates_filtered": False,
+            "scenic_pois": [],
         }
 
     llm = DeepSeekProvider(model=DeepSeekProvider.CHAT_MODEL)
@@ -144,6 +148,12 @@ async def parse_request_node(state: dict) -> dict:
 
     days = data.get("days", 1)
     budget_total = float(data.get("budget_total", 0) or 0)
+    travel_time = data.get("travel_time") or ""
+    starts = explicit_departure(user_input)
+    if starts is not None:
+        travel_time = starts.isoformat()
+    elif dates_in_text(travel_time):
+        travel_time = ""
 
     req = TravelRequest(
         destination=data.get("destination", ""),
@@ -160,7 +170,7 @@ async def parse_request_node(state: dict) -> dict:
         preferences=data.get("preferences", ["文化历史"]),
         special_requirements=data.get("special_requirements", []),
         departure_city=data.get("departure_city", ""),
-        travel_time=data.get("travel_time", ""),
+        travel_time=travel_time,
         pace=data.get("pace", "moderate"),
     )
 
@@ -177,4 +187,7 @@ async def parse_request_node(state: dict) -> dict:
     return {
         "travel_request": req.model_dump(),
         "agent_history": [execution.model_dump()],
+        "restriction_snapshot": {},
+        "scenic_candidates_filtered": False,
+        "scenic_pois": [],
     }

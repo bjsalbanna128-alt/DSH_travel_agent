@@ -3,20 +3,18 @@
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Response
-from sqlalchemy import and_, delete, exists, func, select, update
+from sqlalchemy import delete, exists, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import undefer
 
-from app.db.recommendation_models import Recommendation, RecommendationImage, RecommendationVersion
+from app.db.recommendation_models import Recommendation, RecommendationDelivery, RecommendationImage, RecommendationVersion
+from app.db.support_models import utc_now
 from app.schemas.admin_resources import ResourcePage
 from app.schemas.itinerary_templates import Visibility
 from app.schemas.recommendations import CoverInfo, ReaderRecommendation, RecommendationDetail, RecommendationDraft
 from app.services.recommendation_images import DecodedCover
+from app.services.recommendation_delivery import LATEST_VERSION, eligible_at
 
-LATEST_VERSION = and_(
-    RecommendationVersion.recommendation_id == Recommendation.id,
-    RecommendationVersion.version == Recommendation.published_version,
-)
 SNAPSHOT_FIELDS = ("title", "place", "short_text", "display_order", "cover_id")
 NO_STORE = {"Cache-Control": "private, no-store"}
 REVISION_CONFLICT = "推荐内容已被修改，请保留当前输入，重新加载并核对后再提交。"
@@ -160,10 +158,12 @@ async def unpublish(db: AsyncSession, recommendation_id: str, expected: int, ope
     return await get_draft(db, recommendation_id)
 
 
-async def list_published(db: AsyncSession) -> list[ReaderRecommendation]:
-    versions = await db.scalars(select(RecommendationVersion).join(Recommendation, LATEST_VERSION).where(
-        Recommendation.visibility == "published",
-    ).order_by(RecommendationVersion.display_order, RecommendationVersion.recommendation_id))
+async def list_published(db: AsyncSession, *, at: datetime | None = None) -> list[ReaderRecommendation]:
+    now = at.astimezone(timezone.utc) if at is not None else utc_now()
+    versions = await db.scalars(select(RecommendationVersion).join(Recommendation, LATEST_VERSION)
+        .join(RecommendationDelivery, RecommendationDelivery.recommendation_id == Recommendation.id)
+        .where(Recommendation.visibility == "published", *eligible_at(now))
+        .order_by(RecommendationVersion.display_order, RecommendationVersion.recommendation_id))
     return [ReaderRecommendation(
         id=row.recommendation_id, version=row.version, title=row.title, place=row.place, short_text=row.short_text,
         cover_url=f"/api/v1/recommendations/{row.recommendation_id}/versions/{row.version}/cover",

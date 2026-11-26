@@ -17,7 +17,9 @@ from app.api import deps
 from app.config import settings
 from app.db import database
 from app.db.models import User
-from app.db.recommendation_models import Recommendation, RecommendationImage, RecommendationVersion
+from app.db.recommendation_models import (
+    Recommendation, RecommendationDelivery, RecommendationDeliveryMigration, RecommendationImage, RecommendationVersion,
+)
 from app.db.resource_models import Supplier
 from app.db.template_models import ItineraryTemplate
 from app.main import app
@@ -26,6 +28,7 @@ from app.services.recommendation_images import MAX_IMAGE_BYTES
 
 ADMIN = "/api/v1/admin/recommendations"
 READER = "/api/v1/recommendations"
+DELIVERY = "/api/v1/admin/ai/home-recommendations"
 
 
 def auth(account="editor-one"):
@@ -117,6 +120,10 @@ def feed(api):
     return ok(response)
 
 
+def delivery(api, row, revision=0, **options):
+    return api.put(f"{DELIVERY}/{row['id']}", json={"expected_revision": revision, "enabled": True, **options})
+
+
 def test_initial_draft_permissions_and_publication_requirements(api):
     anonymous = {"Authorization": ""}
     guest = auth("guest")
@@ -148,6 +155,8 @@ def test_snapshot_replaces_copy_cover_and_position_together(api):
     first = ok(action(api, ok(upload(api, first, blue))))
     second = create(api, fields("街区", 20))
     second = ok(action(api, ok(upload(api, second, blue))))
+    ok(delivery(api, first))
+    ok(delivery(api, second))
     old, _ = feed(api)
     assert set(old) == {"id", "version", "title", "place", "short_text", "cover_url"}
     old_bytes = api.get(old["cover_url"])
@@ -249,6 +258,8 @@ def test_equal_order_concurrency_and_publish_rollback(api):
     assert race("PUT", "draft", {**fields("改过标题"), "expected_revision": row["revision"]}) == [200, 409]
     saved = ok(api.get(draft_url(row)))
     assert race("POST", "publish", {"expected_revision": saved["revision"]}) == [200, 409]
+    ok(delivery(api, row))
+    ok(delivery(api, other))
     assert [item["id"] for item in feed(api)] == sorted([row["id"], other["id"]])
     published = ok(api.get(draft_url(row)))
     invalid = ok(save(api, published, {**fields(), "place": ""}))
@@ -271,7 +282,10 @@ def test_equal_order_concurrency_and_publish_rollback(api):
 
 def test_initialize_existing_database_twice_and_reopen_published_cover(engine):
     async def check():
-        new_tables = {Recommendation.__table__, RecommendationImage.__table__, RecommendationVersion.__table__}
+        new_tables = {model.__table__ for model in (
+            Recommendation, RecommendationImage, RecommendationVersion,
+            RecommendationDelivery, RecommendationDeliveryMigration,
+        )}
         async with engine.begin() as conn:
             existing = [table for table in database.Base.metadata.sorted_tables if table not in new_tables]
             await conn.run_sync(lambda sync: database.Base.metadata.create_all(sync, tables=existing))
@@ -299,7 +313,8 @@ def test_initialize_existing_database_twice_and_reopen_published_cover(engine):
     try:
         client.headers.update(auth())
         raw = picture()
-        ok(action(client, ok(upload(client, create(client, fields()), raw))))
+        published = ok(action(client, ok(upload(client, create(client, fields()), raw))))
+        ok(delivery(client, published))
         cover, = ok(client.get(READER))
         asyncio.run(engine.dispose())
         asyncio.run(database.init_db())

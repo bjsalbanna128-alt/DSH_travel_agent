@@ -138,7 +138,10 @@ async def search_attractions_hybrid(
     try:
         store = get_chroma_store()
         if store.collection_count("attractions") > 0:
-            chroma_results = store.search_attractions(query, city=city, k=min(limit, 20))
+            chroma_results = [
+                {**item, "source": "chroma", "city": item.get("city") or city} if item.get("id") else item
+                for item in store.search_attractions(query, city=city, k=min(limit, 20))
+            ]
             logger.info(f"ChromaDB attractions: {len(chroma_results)} results")
     except Exception as e:
         logger.warning(f"ChromaDB search failed (will use Amap only): {e}")
@@ -158,6 +161,10 @@ async def search_attractions_hybrid(
         poi_type="attraction",
         offset=amap_offset,
     )
+    amap_results = [
+        {**item, "source": "amap", "city": item.get("city") or city} if item.get("id") else item
+        for item in amap_results
+    ]
 
     merged = _merge_and_dedup(chroma_results, amap_results, prefer_chroma=True)
     merged = _rerank(query, merged, top_k=limit)

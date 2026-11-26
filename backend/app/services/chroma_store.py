@@ -136,6 +136,7 @@ class ChromaStore:
             items.append({
                 "id": aid,
                 "name": meta.get("name", ""),
+                "city": meta.get("city", ""),
                 "category": meta.get("category", ""),
                 "rating": meta.get("rating", 4.0),
                 "ticket_price_cny": meta.get("ticket_price", 0),

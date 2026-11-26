@@ -11,6 +11,7 @@ from app.schemas.travel_state import (
     AgentExecution, DayPlan, Itinerary, ApprovalRequest,
 )
 from app.services.itinerary_costs import estimate_day_cost, traveler_count
+from app.services.planning_quality import annotate, assess, route_guidance, with_poi_identity
 from app.services.transport_plan import (
     build_intraday_transports, intercity_median_total, parse_intercity_estimates,
 )
@@ -70,6 +71,8 @@ async def itinerary_compiler_node(state: dict) -> dict:
     req = state.get("travel_request", {})
     attractions = state.get("attractions", [])
     routes = state.get("routes", [])
+    restrictions = state.get("restriction_snapshot") or {"available": True, "rules": []}
+    pois = state.get("scenic_pois") or attractions
     hotels = state.get("hotels", [])
     restaurants = state.get("restaurants", [])
     days = req.get("days", 0)
@@ -87,12 +90,13 @@ async def itinerary_compiler_node(state: dict) -> dict:
         "routes": json.dumps(routes, ensure_ascii=False, indent=2),
         "hotels": json.dumps(hotels, ensure_ascii=False, indent=2),
         "restaurants": json.dumps(restaurants, ensure_ascii=False, indent=2),
+        "scenic_guidance": route_guidance(attractions, req, restrictions),
     }
 
     user_prompt = json.dumps(ctx, ensure_ascii=False, indent=2)
 
     raw = await llm.chat(
-        system_prompt=COMPILER_SYSTEM_PROMPT,
+        system_prompt=COMPILER_SYSTEM_PROMPT + "\nscenic_guidance 中有可用日的景点只允许排在该列表内。",
         user_prompt=user_prompt,
         temperature=0.4,
         json_mode=True,
@@ -120,7 +124,8 @@ async def itinerary_compiler_node(state: dict) -> dict:
                 attrs.append({"name": a, "description": a, "visit_duration_hours": 2.0,
                               "rating": 4.0, "ticket_price_cny": 0, "category": "cultural"})
             elif isinstance(a, dict):
-                attrs.append(a)
+                attrs.append(with_poi_identity(a, pois))
+        attrs = [with_poi_identity(attr, pois) if "source" not in attr else attr for attr in attrs]
 
         # Sanitize route — LLM often outputs a string or dict missing "day" field
         route = dp.get("route")
@@ -225,47 +230,18 @@ async def constraint_validator_node(state: dict) -> dict:
     itinerary = state.get("itinerary", {})
     replan_count = state.get("replan_count", 0)
 
-    violations = []
-    budget_limit = req.get("budget", {}).get("total_cny", 0)
-    total_estimate = itinerary.get("total_budget_estimate_cny", 0)
-
-    # Budget check
-    if budget_limit > 0 and total_estimate > budget_limit * 1.5:
-        violations.append(
-            f"超出预算：预估{total_estimate:.0f}元 vs 预算{budget_limit:.0f}元"
-        )
-
-    # Time check per day
-    for dp in itinerary.get("day_plans", []):
-        total_hours = sum(
-            a.get("visit_duration_hours", 2) for a in dp.get("attractions", [])
-        )
-        total_hours += (dp.get("route") or {}).get("estimated_travel_time_minutes", 0) / 60
-        if total_hours > 12:
-            violations.append(
-                f"第{dp.get('day')}天行程过满：游览和路途预计{total_hours:.1f}小时"
-            )
-
-    # Attraction count check
-    total_attrs = sum(
-        len(dp.get("attractions", [])) for dp in itinerary.get("day_plans", [])
-    )
-    if total_attrs == 0:
-        violations.append("行程中没有景点")
-
-    # Only replan on FIRST violation — avoid infinite loops
-    if replan_count > 0:
-        logger.info(f"Already replanned once, accepting constraints with {len(violations)} violations")
-        return {
-            "constraint_violations": violations,
-            "needs_replan": False,  # always proceed after first replan
-        }
-
-    needs_replan = len(violations) > 0
+    restrictions = state.get("restriction_snapshot") or {"available": True, "rules": []}
+    _, findings = assess(itinerary, req, restrictions)
+    violations = [
+        item.reason if not item.attraction else f"第{item.day}天 {item.attraction}：{item.reason}"
+        for item in findings if item.result == "violation"
+    ]
+    needs_replan = bool(violations) and replan_count == 0
     return {
         "constraint_violations": violations,
         "needs_replan": needs_replan,
         "replan_count": replan_count + 1 if needs_replan else replan_count,
+        "itinerary": annotate(itinerary, findings),
     }
 
 

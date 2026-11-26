@@ -68,7 +68,13 @@ const plan = computed(() => versionDetail.value?.itinerary ?? data.value?.itiner
           <div><dt>天数</dt><dd>{{ data.duration_days }} 天</dd></div>
           <div><dt>预估总费用</dt><dd>{{ data.budget_total > 0 ? `¥${data.budget_total.toLocaleString()}` : '—' }}</dd></div>
           <div><dt>当前版本</dt><dd>v{{ data.version }}</dd></div>
-          <div><dt>确认版本</dt><dd>{{ confirmedLabel(data.confirmed_version) }}</dd></div>
+          <div>
+            <dt>确认版本</dt>
+            <dd>
+              {{ confirmedLabel(data.confirmed_version) }}
+              <router-link :to="{ name: 'admin-ai-quality', query: { trip: data.id, version: data.confirmed_version ?? data.version } }">查看质检</router-link>
+            </dd>
+          </div>
           <div><dt>创建时间（北京时间）</dt><dd>{{ tripTime(data.created_at) }}</dd></div>
           <div><dt>最近更新（北京时间）</dt><dd>{{ tripTime(data.updated_at) }}</dd></div>
         </dl>

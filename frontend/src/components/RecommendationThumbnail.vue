@@ -2,7 +2,7 @@
 import { useRecommendationCover } from '../composables/useRecommendationCover'
 import type { CoverInfo } from '../types/recommendations'
 
-const props = defineProps<{ cover: CoverInfo | null; title: string; place: string }>()
+const props = defineProps<{ cover: Pick<CoverInfo, 'id' | 'url'> | null; title: string; place: string }>()
 const { url, failed } = useRecommendationCover(() => props.cover)
 </script>
 
